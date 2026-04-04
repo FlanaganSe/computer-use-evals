@@ -500,6 +500,13 @@ Reason:
 
 If desktop complexity becomes high before browser learnings are exhausted, pause desktop work and keep the PoC browser-first.
 
+- [x] M6: Evidence/Recording-Ingest Prototype
+  - [x] Step 1 — Create evidence/.gitkeep, extract AX helpers from macos.py for reuse → verify: `uv run mypy src/harness/environments/macos.py`
+  - [x] Step 2 — Implement capture.py (capture_session + manifest) + test_capture.py → verify: `uv run pytest tests/test_capture.py -v`
+  - [x] Step 3 — Implement intent_extract.py (VLM extraction + YAML parse) + test_intent_extract.py → verify: `uv run pytest tests/test_intent_extract.py -v`
+  - [x] Step 4 — Add capture and author CLI commands + run full suite → verify: `uv run pytest -v && uv run ruff check src/ tests/ && uv run mypy src/`
+  Commit: "feat: evidence capture and VLM-based task authoring pipeline"
+
 #### M6: Evidence Or Recording-Ingest Prototype
 
 **Goal**

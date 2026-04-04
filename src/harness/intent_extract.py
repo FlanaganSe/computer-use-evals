@@ -1,0 +1,247 @@
+"""VLM-based intent extraction and task YAML generation.
+
+Reads an evidence directory (screenshots + optional ARIA/transcript),
+sends sampled frames to a vision-language model, and parses the response
+into a draft Task YAML.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+from openai import OpenAI
+
+from harness.types import Task
+
+logger = logging.getLogger(__name__)
+
+EXTRACTION_PROMPT = """\
+You are analyzing a series of screenshots showing a user performing a task \
+on their computer. The screenshots are in chronological order, taken \
+{interval} seconds apart.
+
+{aria_context}\
+{transcript_context}\
+
+Based on this evidence, generate a task definition in YAML format that \
+describes what the user was trying to accomplish. The task definition \
+should be machine-readable and will be used to test whether an AI agent \
+can replicate this workflow.
+
+Use this exact YAML schema:
+
+task_id: "<short-kebab-case-id>"
+version: "1.0"
+environment: "<browser or macos_desktop>"
+
+goal:
+  description: "<Clear description of what to accomplish. \
+Use {{{{variable}}}} placeholders for values that should be parameterizable.>"
+  variables:
+    <variable_name>:
+      type: "<url|string|path>"
+      default: "<default value>"
+
+preconditions:
+  - "<What must be true before starting>"
+
+setup_script: null
+
+verification:
+  primary:
+    method: "programmatic"
+    check: "<file_exists('path') or file_contains('path', 'text') \
+or form_submitted('name', 'email')>"
+
+cleanup_script: null
+
+Guidelines:
+- The task_id should be descriptive and kebab-cased
+- Use variables for any value that might change between runs
+- The environment should be "browser" if web-based, "macos_desktop" if native apps
+- Preconditions describe the starting state, not the steps
+- Verification checks the outcome, not the path taken
+- Available checks: file_exists('path'), file_contains('path', 'text'), \
+form_submitted('name', 'email')
+- If you cannot determine verification, use a descriptive comment
+
+Return ONLY the YAML. No explanation, no markdown code blocks, just raw YAML.\
+"""
+
+
+def load_evidence(evidence_dir: Path) -> dict[str, Any]:
+    """Load manifest and evidence metadata from an evidence directory."""
+    manifest_path = evidence_dir / "manifest.json"
+    if not manifest_path.exists():
+        msg = f"No manifest.json found in {evidence_dir}"
+        raise FileNotFoundError(msg)
+    manifest: dict[str, Any] = json.loads(manifest_path.read_text())
+    return manifest
+
+
+def sample_frames(screenshots: list[Path], max_frames: int = 10) -> list[Path]:
+    """Sample frames evenly across the recording."""
+    if not screenshots or max_frames <= 0:
+        return screenshots
+    if len(screenshots) <= max_frames:
+        return screenshots
+    if max_frames == 1:
+        return [screenshots[0]]
+    indices: list[int] = [0, len(screenshots) - 1]
+    step = (len(screenshots) - 1) / (max_frames - 1)
+    for i in range(1, max_frames - 1):
+        indices.append(int(i * step))
+    indices = sorted(set(indices))
+    return [screenshots[i] for i in indices]
+
+
+def build_prompt(
+    manifest: dict[str, Any],
+    aria_first: str | None = None,
+    aria_last: str | None = None,
+    transcript: str | None = None,
+) -> str:
+    """Build the extraction prompt from manifest and optional context."""
+    interval = int(manifest.get("capture_interval_ms", 2000)) / 1000
+
+    aria_context = ""
+    if aria_first or aria_last:
+        parts = []
+        if aria_first:
+            parts.append(f"First frame accessibility tree:\n{aria_first}")
+        if aria_last:
+            parts.append(f"Last frame accessibility tree:\n{aria_last}")
+        aria_context = (
+            "Additionally, here are accessibility tree snapshots:\n\n"
+            + "\n\n".join(parts)
+            + "\n\n"
+        )
+
+    transcript_context = ""
+    if transcript:
+        transcript_context = (
+            f"The user provided voice narration during the recording:\n\n{transcript}\n\n"
+        )
+
+    return EXTRACTION_PROMPT.format(
+        interval=interval,
+        aria_context=aria_context,
+        transcript_context=transcript_context,
+    )
+
+
+def build_messages(
+    prompt_text: str,
+    screenshots: list[Path],
+) -> list[dict[str, Any]]:
+    """Build OpenAI chat messages with text prompt and base64-encoded images."""
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt_text}]
+
+    for screenshot in screenshots:
+        image_data = base64.b64encode(screenshot.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_data}"},
+            }
+        )
+
+    return [{"role": "user", "content": content}]
+
+
+def extract_intent(
+    evidence_dir: Path,
+    model: str = "gpt-4o",
+) -> str:
+    """Send evidence to a VLM and get back raw YAML text.
+
+    Requires OPENAI_API_KEY in environment.
+    """
+    manifest = load_evidence(evidence_dir)
+
+    screenshots_dir = evidence_dir / "screenshots"
+    all_screenshots = sorted(screenshots_dir.glob("*.png"))
+    if not all_screenshots:
+        msg = f"No screenshots found in {screenshots_dir}"
+        raise FileNotFoundError(msg)
+    sampled = sample_frames(all_screenshots)
+
+    aria_first: str | None = None
+    aria_last: str | None = None
+    if manifest.get("has_aria"):
+        aria_dir = evidence_dir / "aria"
+        aria_files = sorted(aria_dir.glob("*.yaml"))
+        if aria_files:
+            aria_first = aria_files[0].read_text()
+        if len(aria_files) > 1:
+            aria_last = aria_files[-1].read_text()
+
+    transcript: str | None = None
+    transcript_path = evidence_dir / "transcript.txt"
+    if transcript_path.exists():
+        transcript = transcript_path.read_text()
+
+    prompt_text = build_prompt(manifest, aria_first, aria_last, transcript)
+    messages = build_messages(prompt_text, sampled)
+
+    client = OpenAI()
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,  # type: ignore[arg-type]
+        max_tokens=2000,
+    )
+    if not response.choices:
+        msg = "VLM returned no choices — possible content filter refusal"
+        raise RuntimeError(msg)
+    return response.choices[0].message.content or ""
+
+
+def parse_draft_task(raw_yaml: str) -> Task:
+    """Parse VLM output into a Task model. Raises on validation error."""
+    cleaned = raw_yaml.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"```(?:yaml)?\s*\n?", "", cleaned)
+        cleaned = cleaned.rstrip("`").strip()
+    data = yaml.safe_load(cleaned)
+    return Task.model_validate(data)
+
+
+def author_task(
+    evidence_dir: Path,
+    output_path: Path,
+    model: str = "gpt-4o",
+    dry_run: bool = False,
+) -> str:
+    """Full authoring pipeline: extract intent, parse, write YAML.
+
+    Returns the raw YAML text (written to output_path unless dry_run).
+    """
+    raw_yaml = extract_intent(evidence_dir, model=model)
+
+    try:
+        task = parse_draft_task(raw_yaml)
+        final_yaml = yaml.dump(
+            task.model_dump(by_alias=True, exclude_none=True),
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    except Exception:
+        logger.warning("VLM output did not validate against Task schema, saving raw output")
+        final_yaml = raw_yaml
+        if not dry_run:
+            raw_path = output_path.with_suffix(".yaml.raw")
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path.write_text(raw_yaml)
+
+    if not dry_run:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(final_yaml)
+        logger.info("Draft task written to %s", output_path)
+
+    return final_yaml

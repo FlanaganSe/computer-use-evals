@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from harness.capture import capture_session
+from harness.intent_extract import author_task
 from harness.reporting import collect_runs, generate_comparison_report, generate_detailed_report
 from harness.runner import run_task
 
@@ -29,6 +31,20 @@ def main(argv: list[str] | None = None) -> None:
     compare_parser.add_argument(
         "--detailed", action="store_true", help="Generate detailed report with extended metrics"
     )
+
+    capture_parser = subparsers.add_parser("capture", help="Capture screen evidence")
+    capture_parser.add_argument("--output", required=True, help="Output evidence directory")
+    capture_parser.add_argument(
+        "--interval", type=float, default=2.0, help="Capture interval in seconds"
+    )
+    capture_parser.add_argument("--aria", action="store_true", help="Capture ARIA/AX state")
+    capture_parser.add_argument("--name", default="untitled", help="Task name for manifest")
+
+    author_parser = subparsers.add_parser("author", help="Generate draft task from evidence")
+    author_parser.add_argument("evidence_dir", help="Path to evidence directory")
+    author_parser.add_argument("--output", required=True, help="Output task YAML path")
+    author_parser.add_argument("--model", default="gpt-4o", help="VLM model to use")
+    author_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
 
     args = parser.parse_args(argv)
 
@@ -54,3 +70,25 @@ def main(argv: list[str] | None = None) -> None:
         if args.output:
             Path(args.output).write_text(report)
             print(f"Report written to {args.output}")
+
+    elif args.command == "capture":
+        print(f"Capturing to {args.output} every {args.interval}s (Ctrl+C to stop)...")
+        evidence_dir = capture_session(
+            output_dir=Path(args.output),
+            interval_seconds=args.interval,
+            capture_aria=args.aria,
+            task_name=args.name,
+        )
+        print(f"Evidence captured: {evidence_dir}")
+
+    elif args.command == "author":
+        yaml_text = author_task(
+            evidence_dir=Path(args.evidence_dir),
+            output_path=Path(args.output),
+            model=args.model,
+            dry_run=args.dry_run,
+        )
+        print(yaml_text)
+        if not args.dry_run:
+            print(f"\nDraft task written to {args.output}")
+            print("Review and edit before running through the harness.")
