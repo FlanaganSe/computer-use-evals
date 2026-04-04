@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from harness.adapters.codex_subscription import CodexSubscriptionAdapter
 from harness.adapters.deterministic import DeterministicAdapter
 from harness.adapters.openai_cu import OpenAIComputerUseAdapter
 from harness.environments.browser import BrowserEnvironment
@@ -31,6 +32,7 @@ from harness.types import (
 ADAPTERS: dict[str, type] = {
     "deterministic": DeterministicAdapter,
     "openai_cu": OpenAIComputerUseAdapter,
+    "codex_subscription": CodexSubscriptionAdapter,
 }
 
 

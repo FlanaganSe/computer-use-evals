@@ -1,0 +1,6 @@
+adapter: "codex_subscription"
+tasks:
+  - "tasks/browser_download/task.yaml"
+  - "tasks/browser_form_fill/task.yaml"
+max_steps: 15
+trial_count: 1

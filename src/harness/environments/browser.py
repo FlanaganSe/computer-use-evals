@@ -62,7 +62,7 @@ class BrowserEnvironment:
             screenshot = await page.screenshot(type="png")
 
         if observation_type in (ObservationType.ARIA_STATE, ObservationType.SCREENSHOT_AND_ARIA):
-            aria_snapshot = await page.aria_snapshot()  # type: ignore[attr-defined]
+            aria_snapshot = await page.locator("body").aria_snapshot()
 
         return Observation(
             observation_type=observation_type,

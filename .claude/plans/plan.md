@@ -313,6 +313,13 @@ Prove the task package, run directory, grading contract, and reporting loop with
   - [x] Step 5 — Add comparison reporting + CLI compare command + tests → verify: `uv run pytest tests/test_comparison_report.py -v`
   Commit: "feat: OpenAI computer-use adapter, form-fill task, comparison reporting"
 
+- [x] M3: Track B — Codex Subscription-Backed Browser Evals
+  - [x] Step 1 — Spike: verify Codex CLI returns parseable JSON from ARIA state prompt → verify: manual inspection of CLI output
+  - [x] Step 2 — Create codex_subscription adapter + register in runner → verify: `uv run mypy src/harness/adapters/codex_subscription.py`
+  - [x] Step 3 — Write unit tests (mocked subprocess) → verify: `uv run pytest tests/test_codex_adapter.py -v`
+  - [x] Step 4 — Create run_configs/codex_browser.yaml → verify: `uv run pytest -v`
+  Commit: "feat: Codex subscription adapter with ARIA-state browser evals"
+
 #### M2: Track A — OpenAI Provider-Native Computer-Use
 
 **Goal**
