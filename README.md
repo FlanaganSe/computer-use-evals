@@ -75,3 +75,6 @@ This protocol accommodates adapters with fundamentally different shapes:
 | Deterministic (M1) | None | Selector-based |
 | OpenAI CU (M2) | Screenshot | Pixel-coordinate |
 | Codex (M3) | ARIA state | Semantic locator |
+
+
+Hello
