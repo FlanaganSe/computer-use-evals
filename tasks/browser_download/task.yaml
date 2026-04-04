@@ -2,11 +2,11 @@ task_id: "browser-download"
 version: "1.0"
 
 goal:
-  description: "Download the test PDF from {{url}} and save it as {{filename}}"
+  description: "Navigate to {{url}} and download the test PDF file, saving it as {{filename}}"
   variables:
     url:
       type: "url"
-      default: "http://localhost:8765/test.pdf"
+      default: "http://localhost:8765"
     filename:
       type: "string"
       default: "test.pdf"
