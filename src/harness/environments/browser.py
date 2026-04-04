@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from playwright.async_api import Browser, BrowserContext, Download, Page, Playwright, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Download,
+    Page,
+    Playwright,
+    async_playwright,
+)
 
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 

@@ -320,6 +320,14 @@ Prove the task package, run directory, grading contract, and reporting loop with
   - [x] Step 4 — Create run_configs/codex_browser.yaml → verify: `uv run pytest -v`
   Commit: "feat: Codex subscription adapter with ARIA-state browser evals"
 
+- [ ] M4: Observation Refinement And Comparison
+  - [ ] Step 1 — Add hybrid=True flag to OpenAIComputerUseAdapter + register openai_cu_hybrid in runner → verify: `uv run mypy src/harness/adapters/openai_cu.py src/harness/runner.py`
+  - [ ] Step 2 — Write mocked tests for hybrid adapter behavior → verify: `uv run pytest tests/test_openai_adapter.py -v`
+  - [ ] Step 3 — Add detailed metrics functions + generate_detailed_report() to reporting.py → verify: `uv run mypy src/harness/reporting.py`
+  - [ ] Step 4 — Wire --detailed flag to CLI compare command → verify: `uv run mypy src/harness/cli.py`
+  - [ ] Step 5 — Write tests for detailed metrics computation → verify: `uv run pytest tests/test_detailed_report.py -v`
+  Commit: "feat: hybrid OpenAI adapter variant and detailed comparison metrics"
+
 #### M2: Track A — OpenAI Provider-Native Computer-Use
 
 **Goal**

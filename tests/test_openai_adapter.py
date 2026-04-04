@@ -357,6 +357,90 @@ class TestFirstVsContinuationCall:
         assert input_item["call_id"] == "call_first"
 
 
+class TestHybridAdapter:
+    """Tests for the hybrid (screenshot + ARIA) variant."""
+
+    @pytest.fixture()
+    def hybrid_adapter(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
+            from harness.adapters.openai_cu import OpenAIComputerUseAdapter
+
+            a = OpenAIComputerUseAdapter(hybrid=True)
+            a._client = MagicMock()
+            return a
+
+    def test_name_is_hybrid(self, hybrid_adapter):
+        assert hybrid_adapter.name == "openai_cu_hybrid"
+
+    def test_requests_screenshot_and_aria(self, hybrid_adapter):
+        assert hybrid_adapter.observation_request() == ObservationType.SCREENSHOT_AND_ARIA
+
+    def test_first_call_includes_aria_text(self, hybrid_adapter):
+        cc = _make_computer_call()
+        resp = _mock_response(computer_call=cc)
+        hybrid_adapter._client.responses.create.return_value = resp
+
+        obs = Observation(
+            observation_type=ObservationType.SCREENSHOT_AND_ARIA,
+            screenshot=_TINY_PNG,
+            aria_snapshot="- button 'Submit'",
+            url="http://localhost:8765",
+            page_title="Test Page",
+        )
+        hybrid_adapter.decide(obs, _TASK)
+
+        call_args = hybrid_adapter._client.responses.create.call_args
+        input_msg = call_args.kwargs["input"][0]
+        content_items = input_msg["content"]
+        # Should have: task description, ARIA text, screenshot image
+        assert len(content_items) == 3
+        assert content_items[0]["type"] == "input_text"
+        assert content_items[1]["type"] == "input_text"
+        assert "accessibility tree" in content_items[1]["text"].lower()
+        assert "Submit" in content_items[1]["text"]
+        assert content_items[2]["type"] == "input_image"
+
+    def test_continuation_includes_aria_text(self, hybrid_adapter):
+        cc = _make_computer_call(call_id="call_first")
+        resp1 = _mock_response(response_id="resp_1", computer_call=cc)
+        cc2 = _make_computer_call(call_id="call_second")
+        resp2 = _mock_response(response_id="resp_2", computer_call=cc2)
+        hybrid_adapter._client.responses.create.side_effect = [resp1, resp2]
+
+        obs = Observation(
+            observation_type=ObservationType.SCREENSHOT_AND_ARIA,
+            screenshot=_TINY_PNG,
+            aria_snapshot="- button 'Submit'",
+            url="http://localhost:8765",
+            page_title="Test Page",
+        )
+        hybrid_adapter.decide(obs, _TASK)
+        hybrid_adapter.decide(obs, _TASK)
+
+        second_call = hybrid_adapter._client.responses.create.call_args_list[1]
+        input_items = second_call.kwargs["input"]
+        # Should have computer_call_output + user message with ARIA
+        assert len(input_items) == 2
+        assert input_items[0]["type"] == "computer_call_output"
+        assert input_items[1]["role"] == "user"
+        aria_content = input_items[1]["content"][0]
+        assert "accessibility tree" in aria_content["text"].lower()
+
+    def test_no_aria_in_first_call_without_hybrid(self, adapter):
+        """Standard adapter should NOT include ARIA text."""
+        cc = _make_computer_call()
+        resp = _mock_response(computer_call=cc)
+        adapter._client.responses.create.return_value = resp
+
+        adapter.decide(_make_observation(), _TASK)
+
+        call_args = adapter._client.responses.create.call_args
+        input_msg = call_args.kwargs["input"][0]
+        content_items = input_msg["content"]
+        # Standard: task description + screenshot only
+        assert len(content_items) == 2
+
+
 class TestMissingApiKey:
     def test_raises_without_api_key(self):
         env_patch = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}

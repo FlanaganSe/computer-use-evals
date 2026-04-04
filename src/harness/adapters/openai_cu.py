@@ -47,17 +47,22 @@ _OUTPUT_PRICE_PER_M = 12.00
 class OpenAIComputerUseAdapter:
     """OpenAI computer-use-preview adapter via the Responses API.
 
-    Uses screenshot-only observation. Manages conversation continuity
-    via ``previous_response_id`` (server-side history).
+    Uses screenshot-only observation by default. When ``hybrid=True``,
+    requests both screenshot and ARIA state and includes the accessibility
+    tree as text context in the API call.
+
+    Manages conversation continuity via ``previous_response_id``
+    (server-side history).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, hybrid: bool = False) -> None:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             msg = "OPENAI_API_KEY environment variable is required for the openai_cu adapter"
             raise RuntimeError(msg)
 
         self._client = OpenAI(api_key=api_key)
+        self._hybrid = hybrid
         self._previous_response_id: str | None = None
         self._last_call_id: str | None = None
         self._pending_safety_checks: list[dict[str, str]] = []
@@ -67,10 +72,10 @@ class OpenAIComputerUseAdapter:
 
     @property
     def name(self) -> str:
-        return "openai_cu"
+        return "openai_cu_hybrid" if self._hybrid else "openai_cu"
 
     def observation_request(self) -> ObservationType:
-        return ObservationType.SCREENSHOT
+        return ObservationType.SCREENSHOT_AND_ARIA if self._hybrid else ObservationType.SCREENSHOT
 
     def decide(self, observation: Observation, task: Task) -> list[Action]:
         screenshot = observation.screenshot
@@ -83,7 +88,8 @@ class OpenAIComputerUseAdapter:
             ]
 
         screenshot_b64 = base64.b64encode(screenshot).decode("utf-8")
-        response = self._call_api(screenshot_b64, task)
+        aria_text = observation.aria_snapshot if self._hybrid else None
+        response = self._call_api(screenshot_b64, task, aria_text=aria_text)
 
         # Accumulate usage
         if hasattr(response, "usage") and response.usage is not None:
@@ -168,23 +174,25 @@ class OpenAIComputerUseAdapter:
             self._output_tokens / 1_000_000
         ) * _OUTPUT_PRICE_PER_M
 
-    def _call_api(self, screenshot_b64: str, task: Task) -> Any:
+    def _call_api(self, screenshot_b64: str, task: Task, *, aria_text: str | None = None) -> Any:
         tools: Any = _TOOLS
 
         if self._previous_response_id is None:
-            # First call: send task description + screenshot as user message
-            input_msg: Any = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": task.goal.description},
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:image/png;base64,{screenshot_b64}",
-                        },
-                    ],
-                }
+            # First call: send task description + optional ARIA + screenshot
+            content: list[dict[str, Any]] = [
+                {"type": "input_text", "text": task.goal.description},
             ]
+            if aria_text:
+                content.append(
+                    {"type": "input_text", "text": f"Page accessibility tree:\n{aria_text}"}
+                )
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{screenshot_b64}",
+                }
+            )
+            input_msg: Any = [{"role": "user", "content": content}]
             return self._client.responses.create(
                 model=_MODEL,
                 tools=tools,
@@ -206,7 +214,22 @@ class OpenAIComputerUseAdapter:
             input_item["acknowledged_safety_checks"] = self._pending_safety_checks
             self._pending_safety_checks = []
 
-        continuation_input: Any = [input_item]
+        continuation_input: list[Any] = [input_item]
+        if aria_text:
+            # NOTE: verify that the Responses API accepts mixed input types
+            # (computer_call_output + user message) in Phase 2 live testing.
+            # If not, fall back to including ARIA only in the first call.
+            continuation_input.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"Page accessibility tree:\n{aria_text}",
+                        }
+                    ],
+                }
+            )
         return self._client.responses.create(
             model=_MODEL,
             previous_response_id=self._previous_response_id,

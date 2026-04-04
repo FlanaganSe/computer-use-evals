@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from harness.reporting import collect_runs, generate_comparison_report
+from harness.reporting import collect_runs, generate_comparison_report, generate_detailed_report
 from harness.runner import run_task
 
 
@@ -26,6 +26,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     compare_parser.add_argument("--task", default=None, help="Filter by task ID")
     compare_parser.add_argument("--output", default=None, help="Write report to file")
+    compare_parser.add_argument(
+        "--detailed", action="store_true", help="Generate detailed report with extended metrics"
+    )
 
     args = parser.parse_args(argv)
 
@@ -44,7 +47,9 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.command == "compare":
         runs = collect_runs(Path(args.runs_dir), task_filter=args.task)
-        report = generate_comparison_report(runs)
+        report = (
+            generate_detailed_report(runs) if args.detailed else generate_comparison_report(runs)
+        )
         print(report)
         if args.output:
             Path(args.output).write_text(report)

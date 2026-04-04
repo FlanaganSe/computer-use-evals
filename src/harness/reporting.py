@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
 from harness.types import GraderResult, Task, Trace
@@ -79,6 +80,75 @@ def _format_action(action: dict[str, object]) -> str:
 
     extras = {k: v for k, v in action.items() if k != "type"}
     return f"{action_type} {extras}" if extras else str(action_type)
+
+
+# ---------------------------------------------------------------------------
+# Detailed metrics
+# ---------------------------------------------------------------------------
+
+
+def step_success_rate(trace: Trace) -> float:
+    """Fraction of steps that succeeded (result starts with 'ok' or is 'done')."""
+    if not trace.steps:
+        return 0.0
+    ok = sum(1 for s in trace.steps if s.result.startswith("ok") or s.result == "done")
+    return ok / len(trace.steps)
+
+
+def failure_distribution(runs: list[tuple[Trace, GraderResult]]) -> dict[str, int]:
+    """Count failure categories across multiple runs."""
+    counts: dict[str, int] = {}
+    for trace, _ in runs:
+        if trace.failure_category:
+            cat = trace.failure_category.value
+            counts[cat] = counts.get(cat, 0) + 1
+    return counts
+
+
+def semantic_action_ratio(trace: Trace) -> float:
+    """Fraction of actions using selectors vs pixel coordinates.
+
+    Each step is counted at most once: selector takes precedence over coordinates.
+    Steps with neither (e.g. done, fail, press) are excluded from the ratio.
+    """
+    if not trace.steps:
+        return 0.0
+    semantic = 0
+    pixel = 0
+    for s in trace.steps:
+        if "selector" in s.action:
+            semantic += 1
+        elif "x" in s.action and "y" in s.action:
+            pixel += 1
+    total = semantic + pixel
+    return semantic / total if total > 0 else 0.0
+
+
+def cost_per_success(runs: list[tuple[Trace, GraderResult]]) -> float | None:
+    """Average cost per successful run. Returns None if no runs passed."""
+    passed = [(t, g) for t, g in runs if g.passed]
+    if not passed:
+        return None
+    total_cost: float = sum(
+        float((t.metadata or {}).get("estimated_cost_usd", 0.0)) for t, _ in passed
+    )
+    return total_cost / len(passed)
+
+
+def avg_latency_ms(trace: Trace) -> float | None:
+    """Average latency per step from trace metadata, if available."""
+    meta = trace.metadata or {}
+    if "avg_latency_ms" in meta:
+        return float(meta["avg_latency_ms"])
+    # For adapters with timestamps, compute from step intervals
+    if len(trace.steps) < 2:
+        return None
+    deltas: list[float] = []
+    for i in range(1, len(trace.steps)):
+        dt = (trace.steps[i].timestamp - trace.steps[i - 1].timestamp).total_seconds() * 1000
+        if dt > 0:
+            deltas.append(dt)
+    return sum(deltas) / len(deltas) if deltas else None
 
 
 # ---------------------------------------------------------------------------
@@ -178,5 +248,140 @@ def generate_comparison_report(runs: list[tuple[Trace, GraderResult]]) -> str:
                 f"| {meta.get('api_calls', 0)} |"
             )
         lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
+    """Generate a detailed Markdown comparison report with extended metrics."""
+    if not runs:
+        return "No runs found.\n"
+
+    from harness.failures import FailureCategory
+
+    # Group by adapter and task
+    by_adapter: dict[str, list[tuple[Trace, GraderResult]]] = defaultdict(list)
+    by_task: dict[str, list[tuple[Trace, GraderResult]]] = defaultdict(list)
+    for trace, grade_result in runs:
+        by_adapter[trace.adapter].append((trace, grade_result))
+        by_task[trace.task_id].append((trace, grade_result))
+
+    lines = ["# Detailed Comparison Report", ""]
+
+    # --- Overview table ---
+    lines.append("## Overview")
+    lines.append("")
+    lines.append(
+        "| Adapter | Tasks Passed | Tasks Failed | Step Success Rate | Avg Steps | Avg Cost |"
+    )
+    lines.append("|---|---|---|---|---|---|")
+
+    for adapter_name in sorted(by_adapter.keys()):
+        adapter_runs = by_adapter[adapter_name]
+        passed = sum(1 for _, g in adapter_runs if g.passed)
+        failed = len(adapter_runs) - passed
+        avg_ssr = (
+            sum(step_success_rate(t) for t, _ in adapter_runs) / len(adapter_runs)
+            if adapter_runs
+            else 0.0
+        )
+        avg_steps = (
+            sum(t.total_steps for t, _ in adapter_runs) / len(adapter_runs)
+            if adapter_runs
+            else 0.0
+        )
+        avg_cost = sum(
+            (t.metadata or {}).get("estimated_cost_usd", 0.0) for t, _ in adapter_runs
+        ) / max(len(adapter_runs), 1)
+        lines.append(
+            f"| {adapter_name} | {passed} | {failed} "
+            f"| {avg_ssr:.0%} | {avg_steps:.1f} | ${avg_cost:.4f} |"
+        )
+
+    lines.append("")
+
+    # --- Per-task breakdown ---
+    lines.append("## Per-Task Breakdown")
+    lines.append("")
+
+    for task_id in sorted(by_task.keys()):
+        lines.append(f"### {task_id}")
+        lines.append("")
+        lines.append("| Adapter | Outcome | Steps | Step Success | Cost | Latency (ms) |")
+        lines.append("|---|---|---|---|---|---|")
+
+        task_runs = by_task[task_id]
+        task_runs.sort(key=lambda r: r[0].adapter)
+        for trace, _grade_result in task_runs:
+            ssr = step_success_rate(trace)
+            cost = (trace.metadata or {}).get("estimated_cost_usd", 0.0)
+            latency = avg_latency_ms(trace)
+            latency_str = f"{latency:.0f}" if latency is not None else "\u2014"
+            lines.append(
+                f"| {trace.adapter} | {trace.outcome} "
+                f"| {trace.total_steps} | {ssr:.0%} | ${cost:.4f} | {latency_str} |"
+            )
+        lines.append("")
+
+    # --- Failure analysis ---
+    lines.append("## Failure Analysis")
+    lines.append("")
+
+    all_categories = [c.value for c in FailureCategory]
+    header_cats = " | ".join(cat.capitalize() for cat in all_categories)
+    lines.append(f"| Adapter | {header_cats} |")
+    lines.append("|---" + "|---" * len(all_categories) + "|")
+
+    for adapter_name in sorted(by_adapter.keys()):
+        adapter_runs = by_adapter[adapter_name]
+        dist = failure_distribution(adapter_runs)
+        counts = " | ".join(str(dist.get(cat, 0)) for cat in all_categories)
+        lines.append(f"| {adapter_name} | {counts} |")
+
+    lines.append("")
+
+    # --- Cost efficiency ---
+    lines.append("## Cost Efficiency")
+    lines.append("")
+    lines.append("| Adapter | Runs | Passed | Cost/Success | Semantic Action % |")
+    lines.append("|---|---|---|---|---|")
+
+    for adapter_name in sorted(by_adapter.keys()):
+        adapter_runs = by_adapter[adapter_name]
+        total = len(adapter_runs)
+        passed = sum(1 for _, g in adapter_runs if g.passed)
+        cps = cost_per_success(adapter_runs)
+        cps_str = f"${cps:.4f}" if cps is not None else "\u2014"
+        avg_sar = (
+            sum(semantic_action_ratio(t) for t, _ in adapter_runs) / len(adapter_runs)
+            if adapter_runs
+            else 0.0
+        )
+        lines.append(f"| {adapter_name} | {total} | {passed} | {cps_str} | {avg_sar:.0%} |")
+
+    lines.append("")
+
+    # --- Observation experiment (if hybrid runs exist) ---
+    hybrid_runs = [r for r in runs if r[0].adapter in ("openai_cu", "openai_cu_hybrid")]
+    if hybrid_runs:
+        lines.append("## Observation Experiment")
+        lines.append("")
+        lines.append("| Variant | Task | Outcome | Steps | Step Success | Cost |")
+        lines.append("|---|---|---|---|---|---|")
+        hybrid_runs.sort(key=lambda r: (r[0].adapter, r[0].task_id))
+        for trace, _grade_result in hybrid_runs:
+            ssr = step_success_rate(trace)
+            cost = (trace.metadata or {}).get("estimated_cost_usd", 0.0)
+            lines.append(
+                f"| {trace.adapter} | {trace.task_id} "
+                f"| {trace.outcome} | {trace.total_steps} | {ssr:.0%} | ${cost:.4f} |"
+            )
+        lines.append("")
+
+    # --- Key Findings placeholder ---
+    lines.append("## Key Findings")
+    lines.append("")
+    lines.append("*(To be documented after running experiments)*")
+    lines.append("")
 
     return "\n".join(lines)

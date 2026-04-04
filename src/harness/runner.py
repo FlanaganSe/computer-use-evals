@@ -7,6 +7,7 @@ import contextlib
 import importlib
 import importlib.util
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,9 +30,12 @@ from harness.types import (
     Trace,
 )
 
-ADAPTERS: dict[str, type] = {
+_AdapterFactory = type | Callable[[], Any]
+
+ADAPTERS: dict[str, _AdapterFactory] = {
     "deterministic": DeterministicAdapter,
     "openai_cu": OpenAIComputerUseAdapter,
+    "openai_cu_hybrid": lambda: OpenAIComputerUseAdapter(hybrid=True),
     "codex_subscription": CodexSubscriptionAdapter,
 }
 
