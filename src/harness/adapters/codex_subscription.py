@@ -132,6 +132,7 @@ class CodexSubscriptionAdapter:
             f"Accessibility tree:\n{observation.aria_snapshot}\n\n"
             f"Actions taken so far:\n{history_lines}\n\n"
             "Return ONLY a single JSON object for the next action. Valid formats:\n"
+            '{"action": "goto", "url": "http://example.com"}\n'
             '{"action": "click", "selector": "#element-id"}\n'
             '{"action": "click", "selector": "text=Link Text"}\n'
             '{"action": "type", "selector": "#element-id", "text": "value to type"}\n'
@@ -215,6 +216,11 @@ def _map_codex_action(parsed: dict[str, Any]) -> Action:
 
     try:
         match action_str:
+            case "goto":
+                return Action(
+                    action_type=ActionType.GOTO,
+                    params={"url": parsed["url"]},
+                )
             case "click":
                 return Action(
                     action_type=ActionType.CLICK,

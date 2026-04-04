@@ -57,6 +57,17 @@ class TestObservationRequest:
         assert adapter.observation_request() == ObservationType.ARIA_STATE
 
 
+class TestDecideGotoAction:
+    def test_maps_goto_action(self, adapter):
+        _mock_codex_output(adapter, '{"action": "goto", "url": "http://localhost:8765"}')
+
+        actions = adapter.decide(_make_observation(), _TASK)
+
+        assert len(actions) == 1
+        assert actions[0].action_type == ActionType.GOTO
+        assert actions[0].params["url"] == "http://localhost:8765"
+
+
 class TestDecideClickFromCleanJson:
     def test_maps_click_action(self, adapter):
         _mock_codex_output(adapter, '{"action": "click", "selector": "#download-link"}')
