@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from harness.graders import grade
+from harness.graders import FORM_SUBMISSION_PATH, grade
 from harness.types import Task, TaskGoal, TaskVerification, VerificationCheck
 
 
@@ -57,6 +58,39 @@ class TestFileExistsGrader:
         task = _make_task('file_exists("report.pdf")')
         result = grade(task, tmp_path)
         assert result.passed is True
+
+
+class TestFormSubmittedGrader:
+    def test_passes_with_matching_fields(self, tmp_path: Path) -> None:
+        FORM_SUBMISSION_PATH.write_text(
+            json.dumps({"name": "Jane Doe", "email": "jane@example.com"})
+        )
+        try:
+            task = _make_task("form_submitted('Jane Doe', 'jane@example.com')")
+            result = grade(task, tmp_path)
+            assert result.passed is True
+            assert result.method == "form_submitted"
+        finally:
+            FORM_SUBMISSION_PATH.unlink(missing_ok=True)
+
+    def test_fails_with_wrong_name(self, tmp_path: Path) -> None:
+        FORM_SUBMISSION_PATH.write_text(
+            json.dumps({"name": "John Doe", "email": "jane@example.com"})
+        )
+        try:
+            task = _make_task("form_submitted('Jane Doe', 'jane@example.com')")
+            result = grade(task, tmp_path)
+            assert result.passed is False
+            assert "mismatch" in result.explanation
+        finally:
+            FORM_SUBMISSION_PATH.unlink(missing_ok=True)
+
+    def test_fails_when_no_submission_file(self, tmp_path: Path) -> None:
+        FORM_SUBMISSION_PATH.unlink(missing_ok=True)
+        task = _make_task("form_submitted('Jane Doe', 'jane@example.com')")
+        result = grade(task, tmp_path)
+        assert result.passed is False
+        assert "not found" in result.explanation
 
 
 class TestGraderEdgeCases:

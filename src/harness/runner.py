@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from harness.adapters.deterministic import DeterministicAdapter
+from harness.adapters.openai_cu import OpenAIComputerUseAdapter
 from harness.environments.browser import BrowserEnvironment
 from harness.failures import FailureCategory
 from harness.graders import grade
@@ -29,6 +30,7 @@ from harness.types import (
 
 ADAPTERS: dict[str, type] = {
     "deterministic": DeterministicAdapter,
+    "openai_cu": OpenAIComputerUseAdapter,
 }
 
 
@@ -175,6 +177,10 @@ async def _run_task_async(
         await env.teardown()
         with contextlib.suppress(Exception):
             _run_cleanup(setup_module, task.cleanup_script)
+
+    # Attach cost metadata if the adapter provides it
+    if hasattr(adapter, "get_cost_metadata"):
+        trace.metadata = adapter.get_cost_metadata()
 
     # Write artifacts
     _write_trace(trace, run_dir)

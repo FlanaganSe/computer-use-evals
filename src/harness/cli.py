@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
+from harness.reporting import collect_runs, generate_comparison_report
 from harness.runner import run_task
 
 
@@ -17,6 +19,13 @@ def main(argv: list[str] | None = None) -> None:
     run_parser.add_argument("--adapter", required=True, help="Adapter name")
     run_parser.add_argument("--max-steps", type=int, default=30, help="Maximum steps")
     run_parser.add_argument("--runs-dir", default="runs", help="Output directory for runs")
+
+    compare_parser = subparsers.add_parser("compare", help="Compare runs across adapters")
+    compare_parser.add_argument(
+        "--runs-dir", default="runs", help="Directory containing run outputs"
+    )
+    compare_parser.add_argument("--task", default=None, help="Filter by task ID")
+    compare_parser.add_argument("--output", default=None, help="Write report to file")
 
     args = parser.parse_args(argv)
 
@@ -32,3 +41,11 @@ def main(argv: list[str] | None = None) -> None:
             runs_dir=args.runs_dir,
         )
         print(f"Run complete: {run_dir}")
+
+    elif args.command == "compare":
+        runs = collect_runs(Path(args.runs_dir), task_filter=args.task)
+        report = generate_comparison_report(runs)
+        print(report)
+        if args.output:
+            Path(args.output).write_text(report)
+            print(f"Report written to {args.output}")

@@ -305,6 +305,14 @@ Prove the task package, run directory, grading contract, and reporting loop with
 3. A failing deterministic run is clearly inspectable.
 4. All six verification commands pass: uv sync, unit tests, smoke test, manual run, ruff, mypy.
 
+- [x] M2: Track A — OpenAI Provider-Native Computer-Use
+  - [x] Step 1 — Add openai dep to pyproject.toml, add metadata field to Trace → verify: `uv sync && uv run mypy src/harness/types.py`
+  - [x] Step 2 — Implement OpenAI computer-use adapter (openai_cu.py) with Responses API → verify: `uv run pytest tests/test_openai_adapter.py -v`
+  - [x] Step 3 — Register adapter in runner.py, add cost metadata extraction → verify: `uv run pytest tests/test_deterministic_smoke.py -v`
+  - [x] Step 4 — Create browser-form-fill task (fixtures, setup, grader, deterministic script) → verify: `uv run pytest tests/test_deterministic_smoke.py::test_deterministic_browser_form_fill -v`
+  - [x] Step 5 — Add comparison reporting + CLI compare command + tests → verify: `uv run pytest tests/test_comparison_report.py -v`
+  Commit: "feat: OpenAI computer-use adapter, form-fill task, comparison reporting"
+
 #### M2: Track A — OpenAI Provider-Native Computer-Use
 
 **Goal**

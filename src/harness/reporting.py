@@ -79,3 +79,104 @@ def _format_action(action: dict[str, object]) -> str:
 
     extras = {k: v for k, v in action.items() if k != "type"}
     return f"{action_type} {extras}" if extras else str(action_type)
+
+
+# ---------------------------------------------------------------------------
+# Comparison reporting
+# ---------------------------------------------------------------------------
+
+
+def _load_run_data(run_dir: Path) -> tuple[Trace, GraderResult] | None:
+    """Load trace and grade from a run directory. Returns None on failure."""
+    trace_path = run_dir / "trace.json"
+    grade_path = run_dir / "grade.json"
+
+    if not trace_path.exists() or not grade_path.exists():
+        return None
+
+    trace = Trace.model_validate_json(trace_path.read_text())
+    grader_result = GraderResult.model_validate_json(grade_path.read_text())
+    return trace, grader_result
+
+
+def collect_runs(
+    runs_dir: Path, task_filter: str | None = None
+) -> list[tuple[Trace, GraderResult]]:
+    """Collect all (trace, grade) pairs from run directories under runs_dir."""
+    results: list[tuple[Trace, GraderResult]] = []
+
+    if not runs_dir.exists():
+        return results
+
+    for entry in sorted(runs_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        data = _load_run_data(entry)
+        if data is None:
+            continue
+        trace, grade_result = data
+        if task_filter and trace.task_id != task_filter:
+            continue
+        results.append((trace, grade_result))
+
+    return results
+
+
+def generate_comparison_report(runs: list[tuple[Trace, GraderResult]]) -> str:
+    """Generate a Markdown comparison table from multiple runs."""
+    if not runs:
+        return "No runs found.\n"
+
+    # Group by task
+    by_task: dict[str, list[tuple[Trace, GraderResult]]] = {}
+    for trace, grade_result in runs:
+        by_task.setdefault(trace.task_id, []).append((trace, grade_result))
+
+    lines = [
+        "# Comparison Report",
+        "",
+        "| Task | Adapter | Outcome | Steps | Cost | Failure |",
+        "|---|---|---|---|---|---|",
+    ]
+
+    for task_id in sorted(by_task.keys()):
+        task_runs = by_task[task_id]
+        # Sort by adapter name for consistent ordering
+        task_runs.sort(key=lambda r: r[0].adapter)
+
+        for trace, _grade_result in task_runs:
+            cost = "$0.00"
+            if trace.metadata and "estimated_cost_usd" in trace.metadata:
+                cost = f"${trace.metadata['estimated_cost_usd']:.2f}"
+
+            failure = trace.failure_category.value if trace.failure_category else "—"
+
+            lines.append(
+                f"| {task_id} | {trace.adapter} | {trace.outcome} "
+                f"| {trace.total_steps} | {cost} | {failure} |"
+            )
+
+    lines.append("")
+
+    # Token summary for runs with metadata
+    token_runs = [(t, g) for t, g in runs if t.metadata and "total_tokens" in t.metadata]
+    if token_runs:
+        lines.append("## Cost Summary")
+        lines.append("")
+        lines.append(
+            "| Task | Adapter | Input Tokens | Output Tokens | Total Tokens | Cost | API Calls |"
+        )
+        lines.append("|---|---|---|---|---|---|---|")
+        for trace, _ in token_runs:
+            meta = trace.metadata or {}
+            lines.append(
+                f"| {trace.task_id} | {trace.adapter} "
+                f"| {meta.get('input_tokens', 0):,} "
+                f"| {meta.get('output_tokens', 0):,} "
+                f"| {meta.get('total_tokens', 0):,} "
+                f"| ${meta.get('estimated_cost_usd', 0):.4f} "
+                f"| {meta.get('api_calls', 0)} |"
+            )
+        lines.append("")
+
+    return "\n".join(lines)

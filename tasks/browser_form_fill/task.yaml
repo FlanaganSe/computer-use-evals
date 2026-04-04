@@ -1,0 +1,28 @@
+task_id: "browser-form-fill"
+version: "1.0"
+
+goal:
+  description: "Fill out the form at {{url}} with name '{{name}}' and email '{{email}}', then click Submit"
+  variables:
+    url:
+      type: "url"
+      default: "http://localhost:8766"
+    name:
+      type: "string"
+      default: "Jane Doe"
+    email:
+      type: "string"
+      default: "jane@example.com"
+
+preconditions:
+  - "Local HTTP server is running on port 8766"
+  - "Browser is available"
+
+setup_script: "tasks/browser_form_fill/setup.py"
+
+verification:
+  primary:
+    method: "programmatic"
+    check: "form_submitted('Jane Doe', 'jane@example.com')"
+
+cleanup_script: null

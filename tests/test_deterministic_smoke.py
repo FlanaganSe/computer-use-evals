@@ -68,6 +68,40 @@ def test_deterministic_browser_download(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+def test_deterministic_browser_form_fill(tmp_path: Path) -> None:
+    """Full end-to-end: run deterministic adapter on browser-form-fill task."""
+    run_dir = run_task(
+        task_path="tasks/browser_form_fill/task.yaml",
+        adapter_name="deterministic",
+        max_steps=30,
+        runs_dir=str(tmp_path / "runs"),
+    )
+
+    assert run_dir.exists()
+
+    # All expected files exist
+    assert (run_dir / "trace.json").exists()
+    assert (run_dir / "grade.json").exists()
+    assert (run_dir / "report.md").exists()
+
+    # Trace structure
+    trace = json.loads((run_dir / "trace.json").read_text())
+    assert trace["task_id"] == "browser-form-fill"
+    assert trace["adapter"] == "deterministic"
+    assert trace["outcome"] == "pass"
+    assert trace["total_steps"] >= 4
+
+    # Grade
+    grade = json.loads((run_dir / "grade.json").read_text())
+    assert grade["passed"] is True
+    assert grade["method"] == "form_submitted"
+
+    # Report
+    report = (run_dir / "report.md").read_text()
+    assert "PASS" in report
+
+
+@pytest.mark.slow
 def test_deterministic_failing_run_is_inspectable(tmp_path: Path) -> None:
     """A task with no matching deterministic script should fail clearly."""
     # Create a task YAML that the deterministic adapter doesn't know

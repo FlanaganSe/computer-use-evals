@@ -140,6 +140,7 @@ class Trace(BaseModel):
     outcome: Literal["pass", "fail", "error"] = "error"
     failure_category: FailureCategory | None = None
     total_steps: int = 0
+    metadata: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,28 @@ def _browser_download_script(task: Task) -> list[Action]:
     ]
 
 
+def _browser_form_fill_script(task: Task) -> list[Action]:
+    """Hardcoded actions for the browser-form-fill task."""
+    url_var = task.goal.variables.get("url")
+    url = url_var.default if url_var else "http://localhost:8766"
+
+    name_var = task.goal.variables.get("name")
+    name = name_var.default if name_var else "Jane Doe"
+
+    email_var = task.goal.variables.get("email")
+    email = email_var.default if email_var else "jane@example.com"
+
+    return [
+        Action(action_type=ActionType.GOTO, params={"url": url}),
+        Action(action_type=ActionType.TYPE, params={"selector": "#name", "text": name}),
+        Action(action_type=ActionType.TYPE, params={"selector": "#email", "text": email}),
+        Action(action_type=ActionType.CLICK, params={"selector": "#submit-btn"}),
+        Action(action_type=ActionType.WAIT, params={"ms": 500}),
+        Action(action_type=ActionType.DONE),
+    ]
+
+
 _TASK_SCRIPTS: dict[str, Callable[[Task], list[Action]]] = {
     "browser-download": _browser_download_script,
+    "browser-form-fill": _browser_form_fill_script,
 }
