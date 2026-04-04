@@ -13,7 +13,7 @@ from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "computer-use-preview"
+_MODEL = "computer-use-preview-2025-03-11"
 _DISPLAY_WIDTH = 1280
 _DISPLAY_HEIGHT = 720
 

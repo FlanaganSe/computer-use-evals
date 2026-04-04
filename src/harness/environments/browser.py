@@ -43,9 +43,11 @@ class BrowserEnvironment:
         self._downloads_path.mkdir(parents=True, exist_ok=True)
         (run_dir / "screenshots").mkdir(parents=True, exist_ok=True)
 
+        import os
+
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
-            headless=True,
+            headless=os.environ.get("HARNESS_HEADLESS", "1") != "0",
             downloads_path=str(self._downloads_path),
         )
         self._context = await self._browser.new_context(
