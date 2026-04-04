@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Download, Page, Playwright, async_playwright
 
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
@@ -46,6 +46,17 @@ class BrowserEnvironment:
             accept_downloads=True,
         )
         self._page = await self._context.new_page()
+        self._page.on("download", self._handle_download)
+
+    def _handle_download(self, download: Download) -> None:
+        """Auto-save any download with its suggested filename."""
+        import asyncio
+
+        async def _save(dl: Download) -> None:
+            if self._downloads_path is not None:
+                await dl.save_as(str(self._downloads_path / dl.suggested_filename))
+
+        asyncio.ensure_future(_save(download))
 
     async def collect_observation(self, observation_type: ObservationType) -> Observation:
         if observation_type == ObservationType.NONE:
