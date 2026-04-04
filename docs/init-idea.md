@@ -1,12 +1,15 @@
 The initial idea is that we need:
 
 1. An implementtaion that can "test" harness evaluations for agent performance with desktop tasks.
+2. Able to use codex subscriptions via OAuth
 
 This could almost be considered "harness engineering" if a focus is put on determining optimal ways to cause agents to be able to correctly behave in a desktop based on the intentions of a user. 
 An example is that a user may want to "click button in pdf" and that we need to be able to evaluate what impacts the agents ability to click the correct button. 
 
 Right now we just want some scripts and flows that can run evaluation tests. 
 They should be simple; understandable; and flexible for change. Ideally they would be across operating systems, but at the very least want to be targetted for macOS for right now. 
+
+
 
 
 _____
