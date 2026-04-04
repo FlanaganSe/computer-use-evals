@@ -40,11 +40,14 @@ class MacOSDesktopEnvironment:
     def _check_accessibility_permission() -> bool:
         """Check if Accessibility permission is granted."""
         try:
-            from ApplicationServices import AXIsProcessTrustedWithOptions  # type: ignore[import-untyped]  # noqa: I001
+            from ApplicationServices import (  # type: ignore[import-untyped]  # noqa: I001
+                AXIsProcessTrustedWithOptions,
+                kAXTrustedCheckOptionPrompt,
+            )
             from CoreFoundation import kCFBooleanFalse  # type: ignore[import-untyped]
 
-            options = {"AXTrustedCheckOptionPrompt": kCFBooleanFalse}
-            return bool(AXIsProcessTrustedWithOptions(options, None))
+            options = {kAXTrustedCheckOptionPrompt: kCFBooleanFalse}
+            return bool(AXIsProcessTrustedWithOptions(options))
         except ImportError:
             logger.warning("pyobjc not available — skipping AX permission check")
             return False
