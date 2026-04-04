@@ -1,0 +1,29 @@
+task_id: "desktop-textedit-save"
+version: "1.0"
+environment: "macos_desktop"
+
+goal:
+  description: "Open TextEdit, create a new document, type '{{content}}', and save it as '{{filename}}' in {{directory}}"
+  variables:
+    content:
+      type: "string"
+      default: "Hello from the eval harness"
+    filename:
+      type: "string"
+      default: "harness-test.txt"
+    directory:
+      type: "path"
+      default: "/tmp/harness_desktop_test"
+
+preconditions:
+  - "macOS with Accessibility permission granted"
+  - "Screen Recording permission granted"
+
+setup_script: "tasks/desktop_textedit_save/setup.py"
+
+verification:
+  primary:
+    method: "programmatic"
+    check: "file_contains('/tmp/harness_desktop_test/harness-test.txt', 'Hello from the eval harness')"
+
+cleanup_script: null

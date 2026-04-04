@@ -54,6 +54,9 @@ def _eval_check(check: VerificationCheck, run_dir: Path) -> GraderResult:
     if expr.startswith("file_exists("):
         return _check_file_exists(expr, run_dir)
 
+    if expr.startswith("file_contains("):
+        return _check_file_contains(expr)
+
     if expr.startswith("form_submitted("):
         return _check_form_submitted(expr)
 
@@ -86,6 +89,61 @@ def _check_file_exists(expr: str, run_dir: Path) -> GraderResult:
         method="file_exists",
         explanation=f"Expected file not found: {target}",
         details={"expected_path": str(target)},
+    )
+
+
+def _check_file_contains(expr: str) -> GraderResult:
+    """Check whether a file at an absolute path contains expected text.
+
+    Expects: file_contains('/path/to/file', 'expected text')
+    """
+    inner = expr.removeprefix("file_contains(").removesuffix(")")
+    parts = _parse_quoted_args(inner)
+    if len(parts) != 2:
+        return GraderResult(
+            passed=False,
+            method="file_contains",
+            explanation=f"Expected 2 arguments (path, text), got {len(parts)}",
+        )
+
+    file_path_str, expected_text = parts
+    target = Path(file_path_str)
+
+    if not target.exists():
+        return GraderResult(
+            passed=False,
+            method="file_contains",
+            explanation=f"File not found: {target}",
+            details={"expected_path": str(target)},
+        )
+
+    try:
+        actual = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return GraderResult(
+            passed=False,
+            method="file_contains",
+            explanation=f"Could not read file: {exc}",
+            details={"path": str(target)},
+        )
+
+    if expected_text in actual:
+        return GraderResult(
+            passed=True,
+            method="file_contains",
+            explanation="File contains expected text",
+            details={"path": str(target), "size_bytes": target.stat().st_size},
+        )
+
+    return GraderResult(
+        passed=False,
+        method="file_contains",
+        explanation=f"File does not contain expected text: {expected_text!r}",
+        details={
+            "path": str(target),
+            "expected_text": expected_text,
+            "actual_length": len(actual),
+        },
     )
 
 

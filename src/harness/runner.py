@@ -18,6 +18,7 @@ from harness.adapters.codex_subscription import CodexSubscriptionAdapter
 from harness.adapters.deterministic import DeterministicAdapter
 from harness.adapters.openai_cu import OpenAIComputerUseAdapter
 from harness.environments.browser import BrowserEnvironment
+from harness.environments.macos import MacOSDesktopEnvironment
 from harness.failures import FailureCategory
 from harness.graders import grade
 from harness.reporting import generate_report
@@ -37,6 +38,11 @@ ADAPTERS: dict[str, _AdapterFactory] = {
     "openai_cu": OpenAIComputerUseAdapter,
     "openai_cu_hybrid": lambda: OpenAIComputerUseAdapter(hybrid=True),
     "codex_subscription": CodexSubscriptionAdapter,
+}
+
+ENVIRONMENTS: dict[str, type] = {
+    "browser": BrowserEnvironment,
+    "macos_desktop": MacOSDesktopEnvironment,
 }
 
 
@@ -83,7 +89,12 @@ async def _run_task_async(
 
     # Initialize environment and setup
     setup_module = _load_setup_module(task.setup_script)
-    env = BrowserEnvironment()
+    env_name = task.environment or "browser"
+    env_cls = ENVIRONMENTS.get(env_name)
+    if env_cls is None:
+        msg = f"Unknown environment: {env_name}. Available: {list(ENVIRONMENTS.keys())}"
+        raise ValueError(msg)
+    env = env_cls()
     trace = Trace(task_id=task.task_id, adapter=adapter_name, started_at=now)
     grader_result = GraderResult(
         passed=False, method="not_run", explanation="Grading did not execute"

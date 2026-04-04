@@ -40,6 +40,8 @@ class Observation(BaseModel):
     aria_snapshot: str | None = None
     url: str | None = None
     page_title: str | None = None
+    focused_app: str | None = None
+    a11y_available: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +60,7 @@ class ActionType(StrEnum):
     DRAG = "drag"
     MOVE = "move"
     SCREENSHOT = "screenshot"
+    SHELL = "shell"
     DONE = "done"
     FAIL = "fail"
 
@@ -112,6 +115,7 @@ class Task(BaseModel):
     setup_script: str | None = None
     verification: TaskVerification
     cleanup_script: str | None = None
+    environment: str | None = None
 
 
 # ---------------------------------------------------------------------------

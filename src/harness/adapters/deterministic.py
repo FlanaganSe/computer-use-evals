@@ -85,7 +85,42 @@ def _browser_form_fill_script(task: Task) -> list[Action]:
     ]
 
 
+def _desktop_textedit_save_script(task: Task) -> list[Action]:
+    """Hardcoded actions for the desktop-textedit-save task (AppleScript via SHELL)."""
+    content_var = task.goal.variables.get("content")
+    content = content_var.default if content_var else "Hello from the eval harness"
+
+    filename_var = task.goal.variables.get("filename")
+    filename = filename_var.default if filename_var else "harness-test.txt"
+
+    directory_var = task.goal.variables.get("directory")
+    directory = directory_var.default if directory_var else "/tmp/harness_desktop_test"
+
+    # Escape double quotes for AppleScript string literals
+    content_escaped = content.replace('"', '\\"')
+    directory_escaped = directory.replace('"', '\\"')
+    filename_escaped = filename.replace('"', '\\"')
+
+    applescript = (
+        'tell application "TextEdit"\n'
+        "    activate\n"
+        "    make new document\n"
+        f'    set text of front document to "{content_escaped}"\n'
+        f'    save front document in POSIX file "{directory_escaped}/{filename_escaped}"\n'
+        "end tell"
+    )
+
+    return [
+        Action(
+            action_type=ActionType.SHELL,
+            params={"command": "osascript", "args": ["-e", applescript]},
+        ),
+        Action(action_type=ActionType.DONE),
+    ]
+
+
 _TASK_SCRIPTS: dict[str, Callable[[Task], list[Action]]] = {
     "browser-download": _browser_download_script,
     "browser-form-fill": _browser_form_fill_script,
+    "desktop-textedit-save": _desktop_textedit_save_script,
 }

@@ -320,13 +320,21 @@ Prove the task package, run directory, grading contract, and reporting loop with
   - [x] Step 4 — Create run_configs/codex_browser.yaml → verify: `uv run pytest -v`
   Commit: "feat: Codex subscription adapter with ARIA-state browser evals"
 
-- [ ] M4: Observation Refinement And Comparison
-  - [ ] Step 1 — Add hybrid=True flag to OpenAIComputerUseAdapter + register openai_cu_hybrid in runner → verify: `uv run mypy src/harness/adapters/openai_cu.py src/harness/runner.py`
-  - [ ] Step 2 — Write mocked tests for hybrid adapter behavior → verify: `uv run pytest tests/test_openai_adapter.py -v`
-  - [ ] Step 3 — Add detailed metrics functions + generate_detailed_report() to reporting.py → verify: `uv run mypy src/harness/reporting.py`
-  - [ ] Step 4 — Wire --detailed flag to CLI compare command → verify: `uv run mypy src/harness/cli.py`
-  - [ ] Step 5 — Write tests for detailed metrics computation → verify: `uv run pytest tests/test_detailed_report.py -v`
+- [x] M4: Observation Refinement And Comparison
+  - [x] Step 1 — Add hybrid=True flag to OpenAIComputerUseAdapter + register openai_cu_hybrid in runner → verify: `uv run mypy src/harness/adapters/openai_cu.py src/harness/runner.py`
+  - [x] Step 2 — Write mocked tests for hybrid adapter behavior → verify: `uv run pytest tests/test_openai_adapter.py -v`
+  - [x] Step 3 — Add detailed metrics functions + generate_detailed_report() to reporting.py → verify: `uv run mypy src/harness/reporting.py`
+  - [x] Step 4 — Wire --detailed flag to CLI compare command → verify: `uv run mypy src/harness/cli.py`
+  - [x] Step 5 — Write tests for detailed metrics computation → verify: `uv run pytest tests/test_detailed_report.py -v`
   Commit: "feat: hybrid OpenAI adapter variant and detailed comparison metrics"
+
+- [x] M5: Native macOS Desktop Expansion
+  - [x] Step 1 — Add pyobjc/pyautogui deps, SHELL ActionType, environment field to Task, Observation fields → verify: `uv sync && uv run mypy src/harness/types.py`
+  - [x] Step 2 — Implement MacOSDesktopEnvironment (screenshots, AX tree, actions, permissions) → verify: `uv run mypy src/harness/environments/macos.py`
+  - [x] Step 3 — Wire environment selection in runner.py based on task.environment → verify: `uv run mypy src/harness/runner.py`
+  - [x] Step 4 — Add file_contains grader, TextEdit task YAML/setup, deterministic script → verify: `uv run pytest tests/test_graders.py -v`
+  - [x] Step 5 — Write mocked tests for macOS environment, run full suite → verify: `uv run pytest -v`
+  Commit: "feat: macOS desktop environment with TextEdit task"
 
 #### M2: Track A — OpenAI Provider-Native Computer-Use
 
