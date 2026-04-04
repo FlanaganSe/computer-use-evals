@@ -1,0 +1,25 @@
+task_id: "browser-download"
+version: "1.0"
+
+goal:
+  description: "Download the test PDF from {{url}} and save it as {{filename}}"
+  variables:
+    url:
+      type: "url"
+      default: "http://localhost:8765/test.pdf"
+    filename:
+      type: "string"
+      default: "test.pdf"
+
+preconditions:
+  - "Local HTTP server is running on port 8765"
+  - "Browser is available"
+
+setup_script: "tasks/browser_download/setup.py"
+
+verification:
+  primary:
+    method: "programmatic"
+    check: "file_exists('{{filename}}')"
+
+cleanup_script: null

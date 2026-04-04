@@ -1,0 +1,5 @@
+adapter: "deterministic"
+tasks:
+  - "tasks/browser_download/task.yaml"
+max_steps: 30
+trial_count: 1
