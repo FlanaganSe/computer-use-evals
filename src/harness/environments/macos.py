@@ -413,9 +413,18 @@ async def _wait_for_app_focus_change(pre_app: str) -> None:
 
 
 def _get_window_info() -> dict[str, Any]:
-    """Get focused app name, PID, and window title."""
+    """Get focused app name, PID, and window title.
+
+    Pumps the NSRunLoop before querying so that workspace notifications
+    (including app activation changes) are processed. Without this,
+    NSWorkspace.frontmostApplication() returns stale data when called
+    from within an asyncio event loop.
+    """
     try:
         import Quartz  # type: ignore[import-untyped]
+        from Foundation import NSDate, NSRunLoop  # type: ignore[import-untyped]
+
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.01))
 
         workspace = Quartz.NSWorkspace.sharedWorkspace()
         front_app = workspace.frontmostApplication()
