@@ -9,9 +9,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from harness.intent_extract import (
+    _truncate_aria,
     build_messages,
     build_prompt,
     load_evidence,
+    load_sampled_aria,
     parse_draft_task,
     sample_frames,
 )
@@ -324,8 +326,164 @@ class TestAuthorTask:
         with patch("harness.intent_extract.OpenAI", return_value=mock_client):
             author_task(evidence_dir, output_path)
 
-        # Verify the API was called with messages containing ARIA context
+        # Verify the API was called with messages containing sampled ARIA context
         call_args = mock_client.chat.completions.create.call_args
         messages = call_args.kwargs.get("messages") or call_args[1].get("messages")
         prompt_text = messages[0]["content"][0]["text"]
-        assert "accessibility tree" in prompt_text
+        assert "sampled accessibility tree" in prompt_text
+
+    def test_author_without_aria_has_no_aria_context(self, tmp_path: Path) -> None:
+        from harness.intent_extract import author_task
+
+        evidence_dir = _create_evidence_dir(tmp_path, has_aria=False)
+        output_path = tmp_path / "output" / "task.yaml"
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = VALID_TASK_YAML
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("harness.intent_extract.OpenAI", return_value=mock_client):
+            author_task(evidence_dir, output_path)
+
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args.kwargs.get("messages") or call_args[1].get("messages")
+        prompt_text = messages[0]["content"][0]["text"]
+        assert "accessibility tree" not in prompt_text
+
+
+# ---------------------------------------------------------------------------
+# _truncate_aria
+# ---------------------------------------------------------------------------
+
+
+class TestTruncateAria:
+    def test_short_text_unchanged(self) -> None:
+        text = "AXApplication 'TextEdit'"
+        assert _truncate_aria(text, max_chars=100) == text
+
+    def test_long_text_truncated(self) -> None:
+        text = "A" * 3000
+        result = _truncate_aria(text, max_chars=50)
+        assert len(result) < 80  # 50 + ellipsis line
+        assert result.endswith("… (truncated)")
+        assert result.startswith("A" * 50)
+
+    def test_exact_limit_not_truncated(self) -> None:
+        text = "X" * 100
+        assert _truncate_aria(text, max_chars=100) == text
+
+
+# ---------------------------------------------------------------------------
+# load_sampled_aria
+# ---------------------------------------------------------------------------
+
+
+def _create_evidence_with_aria_frames(
+    tmp_path: Path, num_frames: int, content_fn: object = None
+) -> Path:
+    """Create an evidence directory with a given number of ARIA frames."""
+    evidence_dir = tmp_path / "evidence"
+    aria_dir = evidence_dir / "aria"
+    aria_dir.mkdir(parents=True)
+    for i in range(1, num_frames + 1):
+        text = content_fn(i) if content_fn else f'AXApplication "App" frame={i}'
+        (aria_dir / f"{i:04d}.yaml").write_text(text)
+    return evidence_dir
+
+
+class TestLoadSampledAria:
+    def test_no_aria_dir_returns_empty(self, tmp_path: Path) -> None:
+        assert load_sampled_aria(tmp_path) == []
+
+    def test_empty_aria_dir_returns_empty(self, tmp_path: Path) -> None:
+        (tmp_path / "aria").mkdir()
+        assert load_sampled_aria(tmp_path) == []
+
+    def test_loads_all_when_under_limit(self, tmp_path: Path) -> None:
+        evidence = _create_evidence_with_aria_frames(tmp_path, 3)
+        result = load_sampled_aria(evidence, max_samples=5)
+        assert len(result) == 3
+        assert result[0][0] == 1
+        assert result[-1][0] == 3
+        assert "frame=1" in result[0][1]
+
+    def test_samples_evenly_when_over_limit(self, tmp_path: Path) -> None:
+        evidence = _create_evidence_with_aria_frames(tmp_path, 20)
+        result = load_sampled_aria(evidence, max_samples=3)
+        assert len(result) == 3
+        # First and last should be included
+        assert result[0][0] == 1
+        assert result[-1][0] == 20
+
+    def test_truncates_long_snapshots(self, tmp_path: Path) -> None:
+        evidence = _create_evidence_with_aria_frames(tmp_path, 2, content_fn=lambda i: "X" * 5000)
+        result = load_sampled_aria(evidence, max_samples=5, max_chars_per_sample=100)
+        assert len(result) == 2
+        for _, text in result:
+            assert len(text) < 150  # 100 + ellipsis
+
+    def test_skips_empty_snapshots(self, tmp_path: Path) -> None:
+        evidence_dir = tmp_path / "evidence"
+        aria_dir = evidence_dir / "aria"
+        aria_dir.mkdir(parents=True)
+        (aria_dir / "0001.yaml").write_text("AXApp frame=1")
+        (aria_dir / "0002.yaml").write_text("")  # empty
+        (aria_dir / "0003.yaml").write_text("AXApp frame=3")
+        result = load_sampled_aria(evidence_dir, max_samples=5)
+        assert len(result) == 2
+        assert result[0][0] == 1
+        assert result[1][0] == 3
+
+    def test_skips_whitespace_only_snapshots(self, tmp_path: Path) -> None:
+        evidence_dir = tmp_path / "evidence"
+        aria_dir = evidence_dir / "aria"
+        aria_dir.mkdir(parents=True)
+        (aria_dir / "0001.yaml").write_text("AXApp frame=1")
+        (aria_dir / "0002.yaml").write_text("   \n  \n  ")  # whitespace only
+        result = load_sampled_aria(evidence_dir, max_samples=5)
+        assert len(result) == 1
+        assert result[0][0] == 1
+
+
+# ---------------------------------------------------------------------------
+# build_prompt with aria_samples
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPromptSampledAria:
+    def test_sampled_aria_in_prompt(self) -> None:
+        manifest = {"capture_interval_ms": 2000}
+        samples = [(1, "AXApp first"), (5, "AXApp middle"), (10, "AXApp last")]
+        prompt = build_prompt(manifest, aria_samples=samples)
+        assert "sampled accessibility tree" in prompt
+        assert "[Frame 1]" in prompt
+        assert "[Frame 5]" in prompt
+        assert "[Frame 10]" in prompt
+        assert "AXApp first" in prompt
+        assert "AXApp last" in prompt
+
+    def test_sampled_aria_takes_precedence_over_first_last(self) -> None:
+        manifest = {"capture_interval_ms": 2000}
+        samples = [(1, "Sampled content")]
+        prompt = build_prompt(
+            manifest,
+            aria_first="SHOULD NOT APPEAR",
+            aria_last="SHOULD NOT APPEAR",
+            aria_samples=samples,
+        )
+        assert "Sampled content" in prompt
+        assert "SHOULD NOT APPEAR" not in prompt
+
+    def test_falls_back_to_first_last_when_no_samples(self) -> None:
+        manifest = {"capture_interval_ms": 2000}
+        prompt = build_prompt(manifest, aria_first="AXApp", aria_last="AXWindow")
+        assert "First frame accessibility tree" in prompt
+        assert "AXApp" in prompt
+
+    def test_no_aria_at_all(self) -> None:
+        manifest = {"capture_interval_ms": 2000}
+        prompt = build_prompt(manifest)
+        assert "accessibility tree" not in prompt

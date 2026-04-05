@@ -193,6 +193,52 @@ def group_events(events: list[dict[str, Any]]) -> list[str]:
     return descriptions
 
 
+_MAX_ARIA_SAMPLES = 5
+_MAX_ARIA_CHARS = 2000
+
+
+def _truncate_aria(text: str, max_chars: int = _MAX_ARIA_CHARS) -> str:
+    """Truncate an AX snapshot to *max_chars*, appending an ellipsis if trimmed."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n… (truncated)"
+
+
+def load_sampled_aria(
+    evidence_dir: Path,
+    max_samples: int = _MAX_ARIA_SAMPLES,
+    max_chars_per_sample: int = _MAX_ARIA_CHARS,
+) -> list[tuple[int, str]]:
+    """Load and evenly sample AX snapshots from the aria/ directory.
+
+    Returns a list of ``(frame_number, truncated_text)`` tuples.
+    If fewer snapshots exist than *max_samples*, all are returned.
+    """
+    aria_dir = evidence_dir / "aria"
+    if not aria_dir.is_dir():
+        return []
+    aria_files = sorted(aria_dir.glob("*.yaml"))
+    if not aria_files:
+        return []
+
+    # Re-use the same even-sampling logic used for screenshots
+    sampled_files = sample_frames(aria_files, max_frames=max_samples)
+
+    results: list[tuple[int, str]] = []
+    for path in sampled_files:
+        # Extract sequence number from filename (e.g. "0001.yaml" or "0001_ts.yaml")
+        try:
+            frame_num = int(path.stem.split("_")[0])
+        except ValueError:
+            frame_num = 0
+        raw = path.read_text()
+        if not raw.strip():
+            continue
+        text = _truncate_aria(raw, max_chars_per_sample)
+        results.append((frame_num, text))
+    return results
+
+
 def sample_frames(screenshots: list[Path], max_frames: int = 10) -> list[Path]:
     """Sample frames evenly across the recording."""
     if not screenshots or max_frames <= 0:
@@ -216,12 +262,26 @@ def build_prompt(
     transcript: str | None = None,
     events_context: str | None = None,
     num_screenshots: int = 0,
+    aria_samples: list[tuple[int, str]] | None = None,
 ) -> str:
-    """Build the extraction prompt from manifest and optional context."""
+    """Build the extraction prompt from manifest and optional context.
+
+    If *aria_samples* is provided (list of ``(frame_number, text)`` tuples),
+    it takes precedence over the legacy *aria_first*/*aria_last* parameters,
+    giving the model evenly-spaced AX context across the recording.
+    """
     interval = int(manifest.get("capture_interval_ms", 2000)) / 1000
 
     aria_context = ""
-    if aria_first or aria_last:
+    if aria_samples:
+        parts = [f"[Frame {frame}] Accessibility state:\n{text}" for frame, text in aria_samples]
+        aria_context = (
+            "Additionally, here are sampled accessibility tree snapshots "
+            "showing UI state at different points during the recording:\n\n"
+            + "\n\n".join(parts)
+            + "\n\n"
+        )
+    elif aria_first or aria_last:
         parts = []
         if aria_first:
             parts.append(f"First frame accessibility tree:\n{aria_first}")
@@ -284,15 +344,9 @@ def extract_intent(
         raise FileNotFoundError(msg)
     sampled = sample_frames(all_screenshots)
 
-    aria_first: str | None = None
-    aria_last: str | None = None
+    aria_samples: list[tuple[int, str]] | None = None
     if manifest.get("has_aria"):
-        aria_dir = evidence_dir / "aria"
-        aria_files = sorted(aria_dir.glob("*.yaml"))
-        if aria_files:
-            aria_first = aria_files[0].read_text()
-        if len(aria_files) > 1:
-            aria_last = aria_files[-1].read_text()
+        aria_samples = load_sampled_aria(evidence_dir) or None
 
     transcript: str | None = None
     transcript_path = evidence_dir / "transcript.txt"
@@ -313,7 +367,11 @@ def extract_intent(
             )
 
     prompt_text = build_prompt(
-        manifest, aria_first, aria_last, transcript, events_context, len(sampled)
+        manifest,
+        transcript=transcript,
+        events_context=events_context,
+        num_screenshots=len(sampled),
+        aria_samples=aria_samples,
     )
     messages = build_messages(prompt_text, sampled)
 

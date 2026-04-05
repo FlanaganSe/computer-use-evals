@@ -282,7 +282,11 @@ Acceptance experiments:
 - Re-run the upgraded desktop task and compare “final-outcome-only” diagnosis versus milestone-aware diagnosis.
 - Accept if milestone data reveals at least one actionable failure explanation that the current trace/report would not.
 
-#### Milestone 3: Capture and Authoring Alignment
+#### ~~Milestone 3: Capture and Authoring Alignment~~ ✓ Complete
+
+- [x] Step 1 — Add `load_sampled_aria()` and `_truncate_aria()` to `intent_extract.py`; update `build_prompt()` to accept `aria_samples` list; update `extract_intent()` to load sampled AX snapshots instead of only first/last → verify: `python -m pytest tests/test_intent_extract.py -v`
+- [x] Step 2 — Add tests: sampled AX prompt construction, bounded truncation, backward compatibility when AX disabled, integration with `author_task()` → verify: `python -m pytest tests/test_intent_extract.py tests/test_capture.py tests/test_events.py -v`
+Commit: "align capture and authoring with sampled ax context"
 
 Objective:
 
