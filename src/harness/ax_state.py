@@ -159,8 +159,12 @@ def build_ax_tree(
     max_depth: int = 10,
     ancestry_path: str = "",
     sibling_index: int = 0,
+    _refs: dict[str, Any] | None = None,
 ) -> AXNode | None:
     """Recursively build a structured AXNode tree from a pyobjc AXUIElement.
+
+    If _refs is provided, populates it with {node_id: raw_AXUIElement}
+    so callers can perform direct AX actions on elements without coordinates.
 
     Returns None if the element cannot be read.
     """
@@ -184,6 +188,9 @@ def build_ax_tree(
     current_path = f"{ancestry_path}/{role}:{title}"
     node_id = _make_node_id(role, title, ancestry_path, sibling_index)
 
+    if _refs is not None:
+        _refs[node_id] = element
+
     children: list[AXNode] = []
     ax_children = _get_attr(element, "AXChildren") or []
     # Track sibling signature counts to disambiguate children with same role+title
@@ -194,7 +201,7 @@ def build_ax_tree(
         sig = f"{child_role}:{child_title}"
         child_idx = sibling_counts.get(sig, 0)
         sibling_counts[sig] = child_idx + 1
-        child_node = build_ax_tree(child, depth + 1, max_depth, current_path, child_idx)
+        child_node = build_ax_tree(child, depth + 1, max_depth, current_path, child_idx, _refs)
         if child_node is not None:
             children.append(child_node)
 

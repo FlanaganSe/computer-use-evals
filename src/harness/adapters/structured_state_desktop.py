@@ -402,11 +402,14 @@ class StructuredStateDesktopAdapter:
 
         params: dict[str, Any] = {}
 
-        # Resolve target to coordinates
+        # Resolve target to coordinates, or pass semantic_target for direct AX action
         if target_id:
             node = find_node_by_id(ax_tree, target_id)
             if node is not None and node.center is not None:
                 params["x"], params["y"] = node.center
+                params["semantic_target"] = target_id
+            elif node is not None:
+                # Node found but no bounds — environment can try AXPress directly
                 params["semantic_target"] = target_id
             elif fallback_x is not None and fallback_y is not None:
                 params["x"] = int(fallback_x)

@@ -42,6 +42,7 @@ class MacOSDesktopEnvironment:
         self._screenshots_dir: Path | None = None
         self._target_app: str | None = None
         self._last_ax_tree: AXNode | None = None
+        self._last_ax_refs: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Permission checks
@@ -128,8 +129,10 @@ class MacOSDesktopEnvironment:
                     a11y_available = True
                 else:
                     a11y_available = False
-                # Build structured tree in parallel (for adapters that need it)
-                ax_tree_structured = _get_structured_ax_tree(pid)
+                # Build structured tree (for adapters that need it)
+                ax_refs: dict[str, Any] = {}
+                ax_tree_structured = _get_structured_ax_tree(pid, refs=ax_refs)
+                self._last_ax_refs = ax_refs
             else:
                 a11y_available = False
 
@@ -180,7 +183,10 @@ class MacOSDesktopEnvironment:
                     pyautogui.click(int(params["x"]), int(params["y"]))
                     await asyncio.sleep(_ACTION_SETTLE_DELAY)
                     return "ok"
-                return "error:click requires x,y coordinates for desktop"
+                if self._try_ax_press(params.get("semantic_target")):
+                    await asyncio.sleep(_ACTION_SETTLE_DELAY)
+                    return "ok"
+                return "error:click requires x,y coordinates or a pressable AX element"
 
             case ActionType.DOUBLE_CLICK:
                 if "x" in params and "y" in params:
@@ -261,6 +267,31 @@ class MacOSDesktopEnvironment:
 
             case _:
                 return f"error:unsupported action type {action.action_type} for desktop"
+
+    def _try_ax_press(self, target_id: str | None) -> bool:
+        """Try to perform AXPress on an element by its node ID.
+
+        Uses stored AXUIElement refs from the last observation. Returns True
+        if the action was performed successfully, False to fall back to
+        coordinate-based action.
+        """
+        if target_id is None:
+            return False
+
+        element = self._last_ax_refs.get(target_id)
+        if element is None:
+            return False
+
+        try:
+            from ApplicationServices import AXUIElementPerformAction
+
+            err = AXUIElementPerformAction(element, "AXPress")
+            if err == 0:
+                return True
+            logger.debug("AXPress failed for %s with error %d", target_id, err)
+        except Exception:
+            logger.debug("AXPress exception for %s", target_id, exc_info=True)
+        return False
 
     @staticmethod
     def _is_app_switch_command(command: str, args: list[str]) -> bool:
@@ -367,13 +398,17 @@ def _get_ax_tree(pid: int) -> str | None:
         return None
 
 
-def _get_structured_ax_tree(pid: int) -> AXNode | None:
-    """Get structured AX tree with stable IDs for an app by PID."""
+def _get_structured_ax_tree(pid: int, refs: dict[str, Any] | None = None) -> AXNode | None:
+    """Get structured AX tree with stable IDs for an app by PID.
+
+    If refs is provided, populates it with {node_id: raw_AXUIElement}
+    so the environment can perform direct AX actions on elements.
+    """
     try:
         from ApplicationServices import AXUIElementCreateApplication
 
         app_ref = AXUIElementCreateApplication(pid)
-        return build_ax_tree(app_ref)
+        return build_ax_tree(app_ref, _refs=refs)
     except Exception:
         logger.debug("Failed to get structured AX tree for PID %d", pid, exc_info=True)
         return None
