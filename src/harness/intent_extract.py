@@ -27,6 +27,7 @@ on their computer. The screenshots are in chronological order, taken \
 {interval} seconds apart.
 
 {aria_context}\
+{events_context}\
 {transcript_context}\
 
 Based on this evidence, generate a task definition in YAML format that \
@@ -85,6 +86,92 @@ def load_evidence(evidence_dir: Path) -> dict[str, Any]:
     return manifest
 
 
+def load_events(evidence_dir: Path) -> list[dict[str, Any]] | None:
+    """Load events from events.json if it exists."""
+    events_path = evidence_dir / "events.json"
+    if not events_path.exists():
+        return None
+    data: dict[str, Any] = json.loads(events_path.read_text())
+    events: list[dict[str, Any]] = data.get("events", [])
+    return events if events else None
+
+
+# Max gap between keystrokes to group them as a single "typed" string
+_KEYSTROKE_GROUP_GAP = 0.5
+
+
+def group_events(events: list[dict[str, Any]]) -> list[str]:
+    """Group raw events into human-readable action descriptions.
+
+    Sequential printable key events within 500ms are grouped into typed strings.
+    """
+    if not events:
+        return []
+
+    descriptions: list[str] = []
+    pending_chars: list[str] = []
+    pending_start: float = 0.0
+    prev_t: float = 0.0
+
+    def _flush_pending() -> None:
+        if pending_chars:
+            text = "".join(pending_chars)
+            descriptions.append(f"At t={pending_start}s typed '{text}'")
+            pending_chars.clear()
+
+    for evt in events:
+        t: float = evt.get("t", 0.0)
+        evt_type: str = evt.get("type", "")
+
+        if evt_type == "key":
+            char = evt.get("char")
+            modifiers: list[str] = evt.get("modifiers", [])
+            key_name = evt.get("key_name")
+            hotkey_mods = set(modifiers) & {"command", "control", "option"}
+
+            # Printable char with no hotkey modifiers → group
+            if char is not None and not hotkey_mods:
+                if pending_chars and (t - prev_t) > _KEYSTROKE_GROUP_GAP:
+                    _flush_pending()
+                if not pending_chars:
+                    pending_start = t
+                pending_chars.append(char)
+                prev_t = t
+                continue
+
+            # Non-groupable key event — flush pending first
+            _flush_pending()
+            if hotkey_mods:
+                mod_str = "+".join(m.capitalize() for m in modifiers)
+                key_label = char if char else (key_name or f"keycode={evt.get('keycode')}")
+                descriptions.append(f"At t={t}s pressed {mod_str}+{key_label}")
+            elif key_name:
+                descriptions.append(f"At t={t}s pressed [{key_name}]")
+            else:
+                descriptions.append(f"At t={t}s pressed keycode={evt.get('keycode')}")
+
+        elif evt_type == "mouse":
+            _flush_pending()
+            button = evt.get("button", "left")
+            x, y = evt.get("x", 0), evt.get("y", 0)
+            click_count = evt.get("click_count", 1)
+            if click_count >= 2:
+                descriptions.append(f"At t={t}s double-clicked ({x}, {y})")
+            elif button == "right":
+                descriptions.append(f"At t={t}s right-clicked ({x}, {y})")
+            else:
+                descriptions.append(f"At t={t}s clicked ({x}, {y})")
+
+        elif evt_type == "scroll":
+            _flush_pending()
+            delta_y = evt.get("delta_y", 0)
+            direction = "up" if delta_y > 0 else "down"
+            descriptions.append(f"At t={t}s scrolled {direction}")
+
+    _flush_pending()
+    return descriptions
+
+
 def sample_frames(screenshots: list[Path], max_frames: int = 10) -> list[Path]:
     """Sample frames evenly across the recording."""
     if not screenshots or max_frames <= 0:
@@ -106,6 +193,7 @@ def build_prompt(
     aria_first: str | None = None,
     aria_last: str | None = None,
     transcript: str | None = None,
+    events_context: str | None = None,
 ) -> str:
     """Build the extraction prompt from manifest and optional context."""
     interval = int(manifest.get("capture_interval_ms", 2000)) / 1000
@@ -132,6 +220,7 @@ def build_prompt(
     return EXTRACTION_PROMPT.format(
         interval=interval,
         aria_context=aria_context,
+        events_context=events_context or "",
         transcript_context=transcript_context,
     )
 
@@ -187,7 +276,17 @@ def extract_intent(
     if transcript_path.exists():
         transcript = transcript_path.read_text()
 
-    prompt_text = build_prompt(manifest, aria_first, aria_last, transcript)
+    events_context: str | None = None
+    events = load_events(evidence_dir)
+    if events:
+        grouped = group_events(events)
+        if grouped:
+            events_context = (
+                "Additionally, here is a timeline of the user's input events "
+                "during the recording:\n\n" + "\n".join(grouped) + "\n\n"
+            )
+
+    prompt_text = build_prompt(manifest, aria_first, aria_last, transcript, events_context)
     messages = build_messages(prompt_text, sampled)
 
     client = OpenAI()

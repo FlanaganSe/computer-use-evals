@@ -159,6 +159,20 @@ class TestBuildPrompt:
         prompt = build_prompt(manifest)
         assert "accessibility tree" not in prompt
         assert "voice narration" not in prompt
+        assert "input events" not in prompt
+
+    def test_prompt_with_events_context(self) -> None:
+        manifest = {"capture_interval_ms": 2000}
+        events_ctx = (
+            "Additionally, here is a timeline of the user's input events "
+            "during the recording:\n\n"
+            "At t=1.0s clicked (500, 300)\n"
+            "At t=2.0s typed 'hello'\n\n"
+        )
+        prompt = build_prompt(manifest, events_context=events_ctx)
+        assert "input events" in prompt
+        assert "clicked (500, 300)" in prompt
+        assert "typed 'hello'" in prompt
 
 
 # ---------------------------------------------------------------------------

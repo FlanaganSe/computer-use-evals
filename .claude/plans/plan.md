@@ -507,6 +507,14 @@ If desktop complexity becomes high before browser learnings are exhausted, pause
   - [x] Step 4 — Add capture and author CLI commands + run full suite → verify: `uv run pytest -v && uv run ruff check src/ tests/ && uv run mypy src/`
   Commit: "feat: evidence capture and VLM-based task authoring pipeline"
 
+- [x] M7: Input Event Capture for Evidence Pipeline
+  - [x] Step 1 — Add CGEventTap event recorder to capture.py → verify: `uv run mypy src/harness/capture.py`
+  - [x] Step 2 — Add event grouping + prompt integration to intent_extract.py → verify: `uv run mypy src/harness/intent_extract.py`
+  - [x] Step 3 — Add --no-events flag to cli.py → verify: `uv run mypy src/harness/cli.py`
+  - [x] Step 4 — Write tests for event grouping, prompt construction, manifest → verify: `uv run pytest tests/test_events.py tests/test_capture.py tests/test_intent_extract.py -v`
+  - [x] Step 5 — Full quality suite → verify: `uv run pytest -v && uv run ruff check src/ tests/ && uv run mypy src/`
+  Commit: "feat: add input event capture to evidence pipeline"
+
 #### M6: Evidence Or Recording-Ingest Prototype
 
 **Goal**

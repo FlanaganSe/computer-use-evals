@@ -38,6 +38,12 @@ def main(argv: list[str] | None = None) -> None:
         "--interval", type=float, default=2.0, help="Capture interval in seconds"
     )
     capture_parser.add_argument("--aria", action="store_true", help="Capture ARIA/AX state")
+    capture_parser.add_argument(
+        "--no-events",
+        action="store_true",
+        default=False,
+        help="Disable keyboard/mouse event recording",
+    )
     capture_parser.add_argument("--name", default="untitled", help="Task name for manifest")
 
     author_parser = subparsers.add_parser("author", help="Generate draft task from evidence")
@@ -72,11 +78,15 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Report written to {args.output}")
 
     elif args.command == "capture":
+        capture_events = not args.no_events
+        if capture_events:
+            print("Recording keyboard and mouse input. Evidence may contain passwords.")
         print(f"Capturing to {args.output} every {args.interval}s (Ctrl+C to stop)...")
         evidence_dir = capture_session(
             output_dir=Path(args.output),
             interval_seconds=args.interval,
             capture_aria=args.aria,
+            capture_events=capture_events,
             task_name=args.name,
         )
         print(f"Evidence captured: {evidence_dir}")

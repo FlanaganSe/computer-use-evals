@@ -42,6 +42,27 @@ class TestBuildManifest:
         assert manifest["duration_seconds"] == 0
         assert manifest["has_aria"] is True
 
+    def test_has_events_default_false(self) -> None:
+        frames = [{"sequence": 1, "timestamp": 1000}]
+        manifest = build_manifest(
+            task_name="test",
+            frames=frames,
+            interval_seconds=1.0,
+            capture_aria=False,
+        )
+        assert manifest["has_events"] is False
+
+    def test_has_events_true(self) -> None:
+        frames = [{"sequence": 1, "timestamp": 1000}]
+        manifest = build_manifest(
+            task_name="test",
+            frames=frames,
+            interval_seconds=1.0,
+            capture_aria=False,
+            has_events=True,
+        )
+        assert manifest["has_events"] is True
+
 
 class TestCaptureSession:
     def test_captures_frames_and_writes_manifest(self, tmp_path: Path) -> None:
