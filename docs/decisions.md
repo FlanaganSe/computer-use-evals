@@ -9,10 +9,10 @@
 
 ### ADR-002: Research-driven pivot before further implementation
 **Date:** 2026-04-04
-**Status:** accepted
-**Context:** After M1-M6 completion, the user identified that the harness may be testing the wrong things relative to the product vision. The consolidated research strongly supports a different architecture than what was originally planned. April 2026 tools and models may have shifted the landscape further.
-**Decision:** Pause implementation. Conduct deep research (see `.claude/plans/research-handoff.md`) into current tools, frameworks, models, and best practices before building the next phase. The research must be grounded in what's available and working in April 2026, not just what papers proposed.
-**Consequences:** M7 (CGEventTap input events) is deferred. The next deliverable is a research findings document, not code. Future milestones will be informed by that research rather than the original M1-M6 plan.
+**Status:** superseded (research completed; informed the M1-M6 plan that was executed 2026-04-05)
+**Context:** After the initial M1-M6 buildout, the user identified that the harness may be testing the wrong things relative to the product vision. The consolidated research strongly supports a different architecture than what was originally planned.
+**Decision:** Pause implementation. Conduct deep research into current tools, frameworks, models, and best practices before building the next phase.
+**Consequences:** Research completed (see `docs/research-consolidated.md`). Findings drove the M1-M6 plan that restructured the runtime, authoring, and capture pipelines.
 
 ### ADR-003: Structured-state desktop promoted as primary path
 **Date:** 2026-04-05
@@ -48,3 +48,24 @@
 **Context:** Programmatic verification checks (`file_exists`, `file_contains`) work for filesystem outcomes but cannot verify native app state (calendar events, reminders, notes). `llm_judge` can evaluate traces but cannot check actual system state.
 **Decision:** Add `script_check('path/to/verify.py')` as a programmatic check method. The script runs as a subprocess; exit 0 = pass, non-zero = fail, stdout = explanation. This enables AppleScript-based verification for any macOS app without adding app-specific grader functions.
 **Consequences:** New desktop tasks can use custom verification scripts. The author pipeline's prompt is updated to include `script_check` so VLM-generated tasks can reference it.
+
+### ADR-008: Typed runtime result contract with adapter feedback
+**Date:** 2026-04-05
+**Status:** accepted
+**Context:** The runner recorded action outcomes as opaque strings, and the adapter never learned whether its previous actions succeeded. Every action history entry showed `"pending"`, causing the LLM to repeat failed actions without adjustment. AXPress errors were treated as definitive failures even when the UI state had changed.
+**Decision:** Replace string results with a typed `RuntimeResult` model (`status`, `execution_method`, `state_changed`, `metadata`). Add `notify_result()` to the adapter protocol so the runner feeds actual outcomes back into the LLM's action history. Treat AXPress transport errors as provisional when post-action state evidence shows the UI changed. Add runner-owned stagnation detection using repeated action signatures plus unchanged-state evidence.
+**Consequences:** The adapter prompt shows real outcomes (`ok`, `error`, `no_op`) instead of `"pending"`. The runner can terminate obvious no-progress loops. Action success is no longer determined solely by AXPress return codes. Reports expose structured execution data for research analysis.
+
+### ADR-009: Draft-to-compiled task pipeline
+**Date:** 2026-04-05
+**Status:** accepted
+**Context:** The `harness author` command directly produced the final runtime task YAML. There was no validation between VLM output and execution — invalid check expressions, unresolved variables, and missing script paths only failed at runtime. The same `goal.description` field served as human docs, agent instruction, and VLM prompt, conflating three audiences.
+**Decision:** Split authoring from compilation. `harness author` produces a draft artifact with `compile_metadata` provenance. `harness compile` validates check expressions, variable references, and script paths, then emits a strict runtime task. Add `goal.agent_brief` to separate agent-facing instruction from human-facing description. Adapters prefer `agent_brief` when present.
+**Consequences:** Invalid tasks fail at compile time, not at runtime. The author/compile seam enables prompt and compilation experiments without touching the runtime. Human-readable descriptions and agent instructions can evolve independently.
+
+### ADR-010: Event-aligned capture as opt-in evidence mode
+**Date:** 2026-04-05
+**Status:** accepted
+**Context:** Capture recorded screenshots on a fixed timer with input events on a separate monotonic timeline. Screenshots and events used different clocks and required manual correlation. The VLM received evenly-sampled screenshots plus a text timeline with no structural alignment between them, forcing it to infer what happened between frames.
+**Decision:** Add an explicit `--aligned` capture mode that takes additional screenshots on high-signal events (clicks, app-focus changes) and persists an `aligned_timeline` in the manifest correlating events, screenshots, optional AX snapshots, and app context on a shared time base. Keep it opt-in — the default interval-only mode is preserved. Start with clicks and focus transitions only; do not default to per-keystroke capture.
+**Consequences:** Aligned evidence lets the authoring pipeline correlate user actions directly with screenshots. The VLM receives numbered screenshots with aligned event descriptions. Artifact growth is bounded by debouncing and the sparse trigger set. The standard interval path remains available for lightweight capture.

@@ -2,7 +2,7 @@
 
 A macOS-first eval harness for desktop and browser agent workflows. Tests whether AI agents can reliably complete tasks like saving files, filling forms, and operating desktop apps — and helps understand *why* they fail.
 
-The primary desktop execution path uses **structured accessibility state** (macOS AX trees) fed to a regular LLM, which returns semantic actions resolved against the accessibility tree. This approach achieves significantly higher task success rates and lower costs than screenshot-first methods (see `docs/decisions.md` ADR-001 and `.plans/research-findings.md`).
+The primary desktop execution path uses **structured accessibility state** (macOS AX trees) fed to a regular LLM, which returns semantic actions resolved against the accessibility tree. This approach achieves significantly higher task success rates and lower costs than screenshot-first methods (see `docs/decisions.md` ADR-001 and `docs/research-consolidated.md`).
 
 ## Setup
 
@@ -71,6 +71,18 @@ uv run python -m harness capture --output evidence/my-task --name my-task --alig
 ```
 
 In aligned mode, the manifest includes an `aligned_timeline` that correlates each screenshot with the user action that triggered it (click, app switch, or periodic interval). The authoring pipeline (`harness author`) automatically uses aligned evidence when present, producing higher-quality draft tasks.
+
+### Author and compile tasks
+
+```bash
+# Generate a draft task from captured evidence
+uv run python -m harness author evidence/my-task --output drafts/my-task.yaml
+
+# Validate and compile the draft into a runnable task
+uv run python -m harness compile drafts/my-task.yaml --output tasks/my-task/task.yaml
+```
+
+The author step sends evidence to a VLM and produces a draft artifact. The compile step validates check expressions, variable references, and script paths, then emits the final runtime task. See `docs/decisions.md` ADR-009.
 
 ### Inspect results
 
