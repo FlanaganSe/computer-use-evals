@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from harness.capture import capture_session
-from harness.intent_extract import author_task
+from harness.intent_extract import author_task, group_events, load_events
 from harness.reporting import collect_runs, generate_comparison_report, generate_detailed_report
 from harness.runner import run_task
 
@@ -89,9 +89,26 @@ def main(argv: list[str] | None = None) -> None:
             capture_events=capture_events,
             task_name=args.name,
         )
-        print(f"Evidence captured: {evidence_dir}")
+        print(f"\nEvidence captured: {evidence_dir}")
+        events = load_events(evidence_dir)
+        if events:
+            grouped = group_events(events)
+            if grouped:
+                print("\n--- Recorded actions ---")
+                for line in grouped:
+                    print(f"  {line}")
+                print("---")
 
     elif args.command == "author":
+        evidence_dir_path = Path(args.evidence_dir)
+        events = load_events(evidence_dir_path)
+        if events:
+            grouped = group_events(events)
+            if grouped:
+                print("--- Recorded actions (ground truth) ---")
+                for line in grouped:
+                    print(f"  {line}")
+                print("---\n")
         yaml_text = author_task(
             evidence_dir=Path(args.evidence_dir),
             output_path=Path(args.output),
