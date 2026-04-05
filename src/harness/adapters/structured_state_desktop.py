@@ -316,7 +316,10 @@ class StructuredStateDesktopAdapter:
         parts.append(
             "Return a single JSON action. "
             'Fields: "action" (one of: '
-            "save_document, new_document, close_window "
+            "save_document [triggers save — for new/untitled documents a save dialog "
+            "will appear; use click and type_text in subsequent steps to set filename, "
+            "path, and confirm], "
+            "new_document, close_window "
             "[PREFERRED — use these for standard document/window operations; "
             "the runtime resolves the correct shortcut/transport], "
             "click, double_click, type_text, scroll, "

@@ -100,13 +100,15 @@ def _safe_app_name(name: str) -> str:
 
 
 def _save_document_transports(app_name: str) -> list[_Transport]:
-    """Ordered transports for save_document intent."""
-    transports: list[_Transport] = []
-    safe = _safe_app_name(app_name)
-    if safe:
-        transports.append(("osascript", ["-e", f'tell application "{safe}" to save document 1']))
-    transports.append(("keyboard", ["command", "s"]))
-    return transports
+    """Ordered transports for save_document intent.
+
+    Only keyboard CMD+S is used. osascript `save document 1` is intentionally
+    excluded: it silently saves to iCloud/default for new documents, bypassing
+    any save dialog the LLM needs to specify filename and path.
+    CMD+S is always correct — it opens a dialog for new docs and re-saves
+    for existing docs.
+    """
+    return [("keyboard", ["command", "s"])]
 
 
 def _new_document_transports(app_name: str) -> list[_Transport]:
@@ -668,8 +670,17 @@ class MacOSDesktopEnvironment:
             )
 
             if postcondition_met is not False:
-                # Success or uncertain — accept this transport
+                # Success or uncertain — accept this transport.
+                # Build a descriptive message so the adapter history
+                # tells the LLM what actually happened.
+                if state_changed is True:
+                    msg = f"{intent}:state_changed"
+                elif postcondition_met is True:
+                    msg = f"{intent}:completed"
+                else:
+                    msg = f"{intent}:uncertain"
                 return ok(
+                    message=msg,
                     method=exec_method,
                     state_changed=state_changed,
                     expected_change_observed=postcondition_met,

@@ -247,6 +247,8 @@ class TestAdapterPrompt:
         assert "close_window" in prompt
         assert "PREFERRED" in prompt
         assert "escape hatch" in prompt
+        # save_document explains that dialog interaction may be needed
+        assert "save dialog" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -255,13 +257,11 @@ class TestAdapterPrompt:
 
 
 class TestTransportBuilders:
-    def test_save_transports_with_app(self) -> None:
+    def test_save_transports_keyboard_only(self) -> None:
+        """save_document uses only keyboard CMD+S (no osascript — it silently saves to wrong location)."""
         transports = _save_document_transports("TextEdit")
-        assert len(transports) == 2
-        assert transports[0][0] == "osascript"
-        assert "save document 1" in transports[0][1][-1]
-        assert "TextEdit" in transports[0][1][-1]
-        assert transports[1] == ("keyboard", ["command", "s"])
+        assert len(transports) == 1
+        assert transports[0] == ("keyboard", ["command", "s"])
 
     def test_save_transports_without_app(self) -> None:
         transports = _save_document_transports("")
@@ -360,71 +360,33 @@ class TestSemanticIntentExecution:
         assert result.summary.startswith("error")
         assert "Unknown semantic intent" in result.message
 
-    def test_save_document_via_osascript(self) -> None:
-        """save_document should try osascript first and succeed when it returns 0."""
-        env = self._make_env()
-        action = Action(
-            action_type=ActionType.SEMANTIC_INTENT,
-            params={"intent": "save_document"},
-        )
-
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-
-        with (
-            patch("subprocess.run", return_value=mock_proc) as mock_run,
-            patch(
-                "harness.environments.macos._get_window_info",
-                return_value={
-                    "focused_app": "TextEdit",
-                    "focused_window_title": "Untitled",
-                },
-            ),
-        ):
-            result = self._run_action(env, action)
-
-        assert result.summary == "ok"
-        assert result.execution_method == ExecutionMethod.SHELL
-        assert result.metadata["intent"] == "save_document"
-        assert result.metadata["transport"] == "osascript"
-        # osascript was called with the save command
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        assert call_args[0] == "osascript"
-        assert "save document 1" in call_args[-1]
-
     @patch("pyautogui.hotkey")
-    def test_save_document_falls_back_to_keyboard(self, mock_hotkey: MagicMock) -> None:
-        """When osascript fails, should fall back to CMD+S."""
+    def test_save_document_uses_keyboard(self, mock_hotkey: MagicMock) -> None:
+        """save_document should use CMD+S keyboard only (no osascript)."""
         env = self._make_env()
         action = Action(
             action_type=ActionType.SEMANTIC_INTENT,
             params={"intent": "save_document"},
         )
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 1  # osascript fails
-
-        with (
-            patch("subprocess.run", return_value=mock_proc),
-            patch(
-                "harness.environments.macos._get_window_info",
-                return_value={
-                    "focused_app": "TextEdit",
-                    "focused_window_title": "Untitled",
-                },
-            ),
+        with patch(
+            "harness.environments.macos._get_window_info",
+            return_value={
+                "focused_app": "TextEdit",
+                "focused_window_title": "Untitled",
+            },
         ):
             result = self._run_action(env, action)
 
-        assert result.summary == "ok"
+        assert result.summary.startswith("ok:")
         assert result.execution_method == ExecutionMethod.KEYBOARD
+        assert result.metadata["intent"] == "save_document"
         assert result.metadata["transport"] == "keyboard"
         mock_hotkey.assert_called_once_with("command", "s")
 
     @patch("pyautogui.hotkey")
-    def test_save_keyboard_only_when_no_app(self, mock_hotkey: MagicMock) -> None:
-        """When no focused app, skip osascript and go straight to keyboard."""
+    def test_save_keyboard_with_no_app(self, mock_hotkey: MagicMock) -> None:
+        """save_document works even without a focused app name."""
         env = self._make_env()
         action = Action(
             action_type=ActionType.SEMANTIC_INTENT,
@@ -437,7 +399,7 @@ class TestSemanticIntentExecution:
         ):
             result = self._run_action(env, action)
 
-        assert result.summary == "ok"
+        assert result.summary.startswith("ok:")
         assert result.execution_method == ExecutionMethod.KEYBOARD
         mock_hotkey.assert_called_once_with("command", "s")
 
@@ -463,7 +425,7 @@ class TestSemanticIntentExecution:
         ):
             result = self._run_action(env, action)
 
-        assert result.summary == "ok"
+        assert result.summary.startswith("ok:")
         assert result.metadata["intent"] == "new_document"
 
     def test_close_window_via_osascript(self) -> None:
@@ -488,7 +450,7 @@ class TestSemanticIntentExecution:
         ):
             result = self._run_action(env, action)
 
-        assert result.summary == "ok"
+        assert result.summary.startswith("ok:")
         assert result.metadata["intent"] == "close_window"
 
 
@@ -507,16 +469,14 @@ class TestExpectedChangeObserved:
         env._wait_for_readiness = _noop_readiness  # type: ignore[assignment]
         return env
 
-    def test_save_populates_expected_change_on_title_change(self) -> None:
+    @patch("pyautogui.hotkey")
+    def test_save_populates_expected_change_on_title_change(self, _mock_hotkey: MagicMock) -> None:
         """save_document should set expected_change_observed=True when title changes."""
         env = self._make_env()
         action = Action(
             action_type=ActionType.SEMANTIC_INTENT,
             params={"intent": "save_document"},
         )
-
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
 
         call_count = 0
 
@@ -527,15 +487,13 @@ class TestExpectedChangeObserved:
                 return {"focused_app": "TextEdit", "focused_window_title": "Untitled"}
             return {"focused_app": "TextEdit", "focused_window_title": "report.txt"}
 
-        with (
-            patch("subprocess.run", return_value=mock_proc),
-            patch("harness.environments.macos._get_window_info", side_effect=mock_window_info),
-        ):
+        with patch("harness.environments.macos._get_window_info", side_effect=mock_window_info):
             result = asyncio.run(env.execute_action(action))
 
         assert result.expected_change_observed is True
 
-    def test_save_expected_change_none_when_uncertain(self) -> None:
+    @patch("pyautogui.hotkey")
+    def test_save_expected_change_none_when_uncertain(self, _mock_hotkey: MagicMock) -> None:
         """save_document should set expected_change_observed=None when no strong signal."""
         env = self._make_env()
         action = Action(
@@ -543,18 +501,12 @@ class TestExpectedChangeObserved:
             params={"intent": "save_document"},
         )
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-
-        with (
-            patch("subprocess.run", return_value=mock_proc),
-            patch(
-                "harness.environments.macos._get_window_info",
-                return_value={
-                    "focused_app": "TextEdit",
-                    "focused_window_title": "Untitled",
-                },
-            ),
+        with patch(
+            "harness.environments.macos._get_window_info",
+            return_value={
+                "focused_app": "TextEdit",
+                "focused_window_title": "Untitled",
+            },
         ):
             result = asyncio.run(env.execute_action(action))
 
@@ -582,6 +534,33 @@ class TestExpectedChangeObserved:
         assert result.expected_change_observed is True
         assert result.state_changed is True
 
+    @patch("pyautogui.hotkey")
+    def test_result_message_includes_intent_and_status(self, _mock_hotkey: MagicMock) -> None:
+        """Semantic intent results include descriptive messages for adapter history."""
+        env = MacOSDesktopEnvironment()
+
+        async def _readiness_true(_pre_ids: Any) -> bool:
+            return True
+
+        env._wait_for_readiness = _readiness_true  # type: ignore[assignment]
+
+        action = Action(
+            action_type=ActionType.SEMANTIC_INTENT,
+            params={"intent": "save_document"},
+        )
+
+        with patch(
+            "harness.environments.macos._get_window_info",
+            return_value={
+                "focused_app": "TextEdit",
+                "focused_window_title": "Untitled",
+            },
+        ):
+            result = asyncio.run(env.execute_action(action))
+
+        # state_changed=True and title didn't change → message includes state_changed
+        assert "save_document:state_changed" in result.summary
+
 
 # ---------------------------------------------------------------------------
 # Fallback behavior
@@ -599,12 +578,12 @@ class TestTransportFallback:
         return env
 
     @patch("pyautogui.hotkey")
-    def test_osascript_timeout_falls_back(self, mock_hotkey: MagicMock) -> None:
-        """If osascript times out, should fall back to keyboard."""
+    def test_osascript_timeout_falls_back_to_keyboard(self, mock_hotkey: MagicMock) -> None:
+        """If osascript times out for new_document, should fall back to keyboard."""
         env = self._make_env()
         action = Action(
             action_type=ActionType.SEMANTIC_INTENT,
-            params={"intent": "save_document"},
+            params={"intent": "new_document"},
         )
 
         import subprocess
@@ -615,19 +594,19 @@ class TestTransportFallback:
                 "harness.environments.macos._get_window_info",
                 return_value={
                     "focused_app": "TextEdit",
-                    "focused_window_title": "Untitled",
+                    "focused_window_title": "report.txt",
                 },
             ),
         ):
             result = asyncio.run(env.execute_action(action))
 
-        assert result.summary == "ok"
+        assert result.summary.startswith("ok:")
         assert result.metadata["transport"] == "keyboard"
-        mock_hotkey.assert_called_once_with("command", "s")
+        mock_hotkey.assert_called_once_with("command", "n")
 
     @patch("pyautogui.hotkey")
-    def test_osascript_oserror_falls_back(self, mock_hotkey: MagicMock) -> None:
-        """If osascript raises OSError, should fall back to keyboard."""
+    def test_osascript_oserror_falls_back_to_keyboard(self, mock_hotkey: MagicMock) -> None:
+        """If osascript raises OSError for close_window, should fall back to keyboard."""
         env = self._make_env()
         action = Action(
             action_type=ActionType.SEMANTIC_INTENT,
@@ -646,7 +625,7 @@ class TestTransportFallback:
         ):
             result = asyncio.run(env.execute_action(action))
 
-        assert result.summary == "ok"
+        assert result.summary.startswith("ok:")
         assert result.metadata["transport"] == "keyboard"
         mock_hotkey.assert_called_once_with("command", "w")
 
