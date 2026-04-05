@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> None:
     author_parser = subparsers.add_parser("author", help="Generate draft task from evidence")
     author_parser.add_argument("evidence_dir", help="Path to evidence directory")
     author_parser.add_argument("--output", required=True, help="Output task YAML path")
-    author_parser.add_argument("--model", default="gpt-4o", help="VLM model to use")
+    author_parser.add_argument("--model", default="gpt-5.4", help="VLM model to use")
     author_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
 
     args = parser.parse_args(argv)

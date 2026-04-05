@@ -257,7 +257,7 @@ def build_messages(
 
 def extract_intent(
     evidence_dir: Path,
-    model: str = "gpt-4o",
+    model: str = "gpt-5.4",
 ) -> str:
     """Send evidence to a VLM and get back raw YAML text.
 
@@ -330,7 +330,7 @@ def parse_draft_task(raw_yaml: str) -> Task:
 def author_task(
     evidence_dir: Path,
     output_path: Path,
-    model: str = "gpt-4o",
+    model: str = "gpt-5.4",
     dry_run: bool = False,
 ) -> str:
     """Full authoring pipeline: extract intent, parse, write YAML.
