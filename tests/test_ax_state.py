@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from harness.ax_state import (
     AXNode,
+    AXQuality,
     _make_node_id,
     build_ax_tree_from_dict,
+    compute_ax_quality,
     coverage_stats,
     find_node_by_id,
     format_for_prompt,
+    interactive_id_set,
     prune_interactive,
+    state_changed,
 )
 
 # ---------------------------------------------------------------------------
@@ -433,3 +437,114 @@ class TestSiblingDisambiguation:
         for child in tree.children:
             found = find_node_by_id(tree, child.node_id)
             assert found is child
+
+
+# ---------------------------------------------------------------------------
+# State-diff: interactive ID sets
+# ---------------------------------------------------------------------------
+
+
+class TestInteractiveIdSet:
+    def test_returns_frozenset(self) -> None:
+        tree = build_ax_tree_from_dict(_sample_tree_dict())
+        assert tree is not None
+        ids = interactive_id_set(tree)
+        assert isinstance(ids, frozenset)
+
+    def test_contains_interactive_ids(self) -> None:
+        tree = build_ax_tree_from_dict(_sample_tree_dict())
+        assert tree is not None
+        ids = interactive_id_set(tree)
+        # Should contain Close, Minimize, TextArea, Bold buttons
+        assert len(ids) == 4
+
+    def test_excludes_non_interactive(self) -> None:
+        tree = build_ax_tree_from_dict(_sample_tree_dict())
+        assert tree is not None
+        ids = interactive_id_set(tree)
+        # Application and Window node IDs should not be in the set
+        assert tree.node_id not in ids
+        assert tree.children[0].node_id not in ids
+
+    def test_empty_tree(self) -> None:
+        tree = build_ax_tree_from_dict({"role": "AXApplication", "title": "Empty"})
+        assert tree is not None
+        ids = interactive_id_set(tree)
+        assert len(ids) == 0
+
+
+class TestStateChanged:
+    def test_identical_sets_no_change(self) -> None:
+        ids = frozenset({"ax_1", "ax_2", "ax_3"})
+        assert state_changed(ids, ids) is False
+
+    def test_different_sets_changed(self) -> None:
+        pre = frozenset({"ax_1", "ax_2"})
+        post = frozenset({"ax_1", "ax_2", "ax_3"})
+        assert state_changed(pre, post) is True
+
+    def test_removed_element_changed(self) -> None:
+        pre = frozenset({"ax_1", "ax_2", "ax_3"})
+        post = frozenset({"ax_1", "ax_2"})
+        assert state_changed(pre, post) is True
+
+    def test_both_empty_returns_none(self) -> None:
+        assert state_changed(frozenset(), frozenset()) is None
+
+    def test_equal_copies(self) -> None:
+        pre = frozenset({"ax_a", "ax_b"})
+        post = frozenset({"ax_a", "ax_b"})
+        assert state_changed(pre, post) is False
+
+
+# ---------------------------------------------------------------------------
+# AX quality metrics
+# ---------------------------------------------------------------------------
+
+
+class TestAXQuality:
+    def test_all_with_bounds(self) -> None:
+        nodes = [
+            AXNode(node_id="ax_1", role="AXButton", title="A", bounds=(0, 0, 10, 10)),
+            AXNode(node_id="ax_2", role="AXButton", title="B", bounds=(20, 0, 10, 10)),
+        ]
+        q = compute_ax_quality(nodes)
+        assert q.interactive_total == 2
+        assert q.interactive_with_bounds == 2
+        assert q.interactive_without_bounds == 0
+
+    def test_none_with_bounds(self) -> None:
+        nodes = [
+            AXNode(node_id="ax_1", role="AXButton", title="A"),
+            AXNode(node_id="ax_2", role="AXButton", title="B"),
+        ]
+        q = compute_ax_quality(nodes)
+        assert q.interactive_total == 2
+        assert q.interactive_with_bounds == 0
+        assert q.interactive_without_bounds == 2
+
+    def test_mixed_bounds(self) -> None:
+        nodes = [
+            AXNode(node_id="ax_1", role="AXButton", title="A", bounds=(0, 0, 10, 10)),
+            AXNode(node_id="ax_2", role="AXButton", title="B"),
+            AXNode(node_id="ax_3", role="AXButton", title="C", bounds=(40, 0, 10, 10)),
+        ]
+        q = compute_ax_quality(nodes)
+        assert q.interactive_total == 3
+        assert q.interactive_with_bounds == 2
+        assert q.interactive_without_bounds == 1
+
+    def test_empty_list(self) -> None:
+        q = compute_ax_quality([])
+        assert q.interactive_total == 0
+        assert q.interactive_with_bounds == 0
+        assert q.interactive_without_bounds == 0
+
+    def test_to_dict(self) -> None:
+        q = AXQuality(interactive_total=5, interactive_with_bounds=3, interactive_without_bounds=2)
+        d = q.to_dict()
+        assert d == {
+            "interactive_total": 5,
+            "interactive_with_bounds": 3,
+            "interactive_without_bounds": 2,
+        }

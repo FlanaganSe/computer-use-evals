@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from harness.types import GraderResult, Task, Trace
+from harness.types import GraderResult, StepRecord, Task, Trace
 
 
 def generate_report(
@@ -51,6 +51,14 @@ def generate_report(
         status = "ok" if step.error is None else f"error: {step.error}"
         lines.append(f"{step.step}. {action_desc} -> {status}")
     lines.append("")
+
+    # Runtime verification summary (M3: AX quality and state-change evidence)
+    steps_with_metrics = [s for s in trace.steps if s.metrics]
+    if steps_with_metrics:
+        lines.append("## Runtime Verification")
+        lines.append("")
+        lines.extend(_format_runtime_verification(steps_with_metrics))
+        lines.append("")
 
     # Evidence summary (if decision-point evidence was persisted)
     evidence_path = run_dir / "evidence.json"
@@ -114,6 +122,47 @@ def generate_report(
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _format_runtime_verification(steps_with_metrics: list[StepRecord]) -> list[str]:
+    """Format aggregated runtime verification metrics for the report.
+
+    Precondition: each step in the list has a non-None metrics dict.
+    """
+    # Extract metrics dicts (all non-None by caller contract)
+    metrics_list = [s.metrics for s in steps_with_metrics if s.metrics is not None]
+    if not metrics_list:
+        return []
+
+    lines: list[str] = []
+    total = len(metrics_list)
+
+    # State change summary
+    state_true = sum(1 for m in metrics_list if m.get("state_changed") is True)
+    state_false = sum(1 for m in metrics_list if m.get("state_changed") is False)
+    state_none = sum(1 for m in metrics_list if m.get("state_changed") is None)
+    lines.append(f"- **Steps with metrics:** {total}")
+    lines.append(f"- **State changed:** {state_true} yes, {state_false} no, {state_none} unknown")
+
+    # Stagnation
+    stagnation = any(m.get("stagnation_detected") for m in metrics_list)
+    if stagnation:
+        lines.append("- **Stagnation detected:** yes")
+
+    # AX quality aggregate (from steps that report it)
+    ax_metrics = [m for m in metrics_list if "interactive_total" in m]
+    if ax_metrics:
+        avg_total = sum(m["interactive_total"] for m in ax_metrics) / len(ax_metrics)
+        avg_with = sum(m.get("interactive_with_bounds", 0) for m in ax_metrics) / len(ax_metrics)
+        avg_without = sum(m.get("interactive_without_bounds", 0) for m in ax_metrics) / len(
+            ax_metrics
+        )
+        lines.append(
+            f"- **Avg interactive elements:** {avg_total:.0f} "
+            f"(with bounds: {avg_with:.0f}, without: {avg_without:.0f})"
+        )
+
+    return lines
 
 
 def _format_milestone_progress(trace: Trace) -> str:

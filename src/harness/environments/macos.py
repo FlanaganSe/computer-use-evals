@@ -13,14 +13,24 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from harness.ax_state import AXNode, build_ax_tree, find_node_by_id
+from harness.ax_state import (
+    AXNode,
+    AXQuality,
+    build_ax_tree,
+    compute_ax_quality,
+    find_node_by_id,
+    interactive_id_set,
+    prune_interactive,
+)
 from harness.runtime_results import ExecutionMethod, RuntimeResult, done, error, fail, ok
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
 
-# Post-action stabilization delay (seconds)
-_ACTION_SETTLE_DELAY = 0.5
+# Readiness polling configuration (replaces fixed _ACTION_SETTLE_DELAY)
+_READINESS_POLL_INTERVAL = 0.1  # seconds between AX tree polls
+_READINESS_MAX_WAIT = 2.0  # upper bound total wait
+_READINESS_MIN_WAIT = 0.15  # floor: always wait at least this long
 
 # Extra settle time after app switch is detected (let UI fully render)
 _APP_SWITCH_SETTLE = 0.5
@@ -117,6 +127,7 @@ class MacOSDesktopEnvironment:
         self._target_app: str | None = None
         self._last_ax_tree: AXNode | None = None
         self._last_ax_refs: dict[str, Any] = {}
+        self._last_focused_pid: int | None = None
 
     # ------------------------------------------------------------------
     # Permission checks
@@ -196,6 +207,7 @@ class MacOSDesktopEnvironment:
         ax_tree_structured: AXNode | None = None
         if observation_type in (ObservationType.ARIA_STATE, ObservationType.SCREENSHOT_AND_ARIA):
             pid = window_info.get("focused_pid")
+            self._last_focused_pid = pid
             if pid is not None:
                 tree = _get_ax_tree(pid)
                 if tree is not None:
@@ -244,6 +256,78 @@ class MacOSDesktopEnvironment:
 
         return action
 
+    def get_ax_quality(self) -> AXQuality | None:
+        """Compute AX quality from the last observed tree, if available."""
+        if self._last_ax_tree is None:
+            return None
+        interactive = prune_interactive(self._last_ax_tree, max_elements=500)
+        return compute_ax_quality(interactive)
+
+    def _capture_pre_state(self) -> frozenset[str]:
+        """Capture the interactive element ID set before an action.
+
+        Returns an empty frozenset if the tree is unavailable. The caller
+        should treat empty pre-state as "cannot determine change".
+        """
+        if self._last_ax_tree is not None:
+            return interactive_id_set(self._last_ax_tree)
+        return frozenset()
+
+    def _get_post_state_ids(self) -> frozenset[str]:
+        """Query a fresh AX tree and return the interactive ID set.
+
+        Also updates _last_ax_tree so subsequent AX quality queries
+        reflect the post-action state.
+        """
+        if self._last_focused_pid is None:
+            return frozenset()
+        tree = _get_structured_ax_tree(self._last_focused_pid)
+        if tree is None:
+            return frozenset()
+        self._last_ax_tree = tree
+        return interactive_id_set(tree)
+
+    def _poll_post_state_ids(self) -> frozenset[str]:
+        """Query a fresh AX tree for polling without mutating _last_ax_tree."""
+        if self._last_focused_pid is None:
+            return frozenset()
+        tree = _get_structured_ax_tree(self._last_focused_pid)
+        if tree is None:
+            return frozenset()
+        return interactive_id_set(tree)
+
+    async def _wait_for_readiness(self, pre_ids: frozenset[str]) -> bool | None:
+        """Poll until AX state changes or timeout, replacing fixed sleep.
+
+        Returns True if state changed, False if unchanged after timeout,
+        None if we cannot determine (empty pre-state).
+
+        Only updates _last_ax_tree on the final check (not during intermediate
+        polls) so transient states don't corrupt the stored tree.
+        """
+        import time
+
+        if not pre_ids:
+            # Cannot determine change — fall back to minimum wait
+            await asyncio.sleep(_READINESS_MIN_WAIT)
+            return None
+
+        # Always wait the minimum floor first
+        await asyncio.sleep(_READINESS_MIN_WAIT)
+
+        deadline = time.monotonic() + (_READINESS_MAX_WAIT - _READINESS_MIN_WAIT)
+        while time.monotonic() < deadline:
+            post_ids = self._poll_post_state_ids()
+            if post_ids and post_ids != pre_ids:
+                # State changed — do a final fetch that updates _last_ax_tree
+                self._get_post_state_ids()
+                return True
+            await asyncio.sleep(_READINESS_POLL_INTERVAL)
+
+        # Final check after timeout (updates _last_ax_tree)
+        post_ids = self._get_post_state_ids()
+        return bool(post_ids and post_ids != pre_ids)
+
     async def execute_action(self, action: Action) -> RuntimeResult:
         import pyautogui  # type: ignore[import-untyped]
 
@@ -253,23 +337,45 @@ class MacOSDesktopEnvironment:
 
         match action.action_type:
             case ActionType.CLICK:
+                pre_ids = self._capture_pre_state()
                 if "x" in params and "y" in params:
                     pyautogui.click(int(params["x"]), int(params["y"]))
-                    await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                    return ok(method=ExecutionMethod.COORDINATES)
-                if self._try_ax_press(params.get("semantic_target")):
-                    await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                    return ok(method=ExecutionMethod.AX_PRESS)
+                    changed = await self._wait_for_readiness(pre_ids)
+                    return ok(
+                        method=ExecutionMethod.COORDINATES,
+                        state_changed=changed,
+                    )
+                # Try AXPress — may return error even when action succeeds
+                ax_ok = self._try_ax_press(params.get("semantic_target"))
+                changed = await self._wait_for_readiness(pre_ids)
+                if ax_ok:
+                    return ok(
+                        method=ExecutionMethod.AX_PRESS,
+                        state_changed=changed,
+                    )
+                # AXPress reported failure — check if state actually changed
+                if changed is True:
+                    # State evidence overrides transport error
+                    return ok(
+                        message="ax_press_error_overridden_by_state_change",
+                        method=ExecutionMethod.AX_PRESS,
+                        state_changed=True,
+                        metadata={"ax_press_transport_error": True},
+                    )
                 return error(
                     "click requires x,y coordinates or a pressable AX element",
                     target_resolved=False,
                 )
 
             case ActionType.DOUBLE_CLICK:
+                pre_ids = self._capture_pre_state()
                 if "x" in params and "y" in params:
                     pyautogui.doubleClick(int(params["x"]), int(params["y"]))
-                    await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                    return ok(method=ExecutionMethod.COORDINATES)
+                    changed = await self._wait_for_readiness(pre_ids)
+                    return ok(
+                        method=ExecutionMethod.COORDINATES,
+                        state_changed=changed,
+                    )
                 return error(
                     "double_click requires x,y coordinates for desktop",
                     target_resolved=False,
@@ -279,9 +385,13 @@ class MacOSDesktopEnvironment:
                 text = params.get("text")
                 if text is None:
                     return error("type requires 'text' param")
+                pre_ids = self._capture_pre_state()
                 pyautogui.write(text, interval=0.02)
-                await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return ok(method=ExecutionMethod.KEYBOARD)
+                changed = await self._wait_for_readiness(pre_ids)
+                return ok(
+                    method=ExecutionMethod.KEYBOARD,
+                    state_changed=changed,
+                )
 
             case ActionType.PRESS:
                 key = params.get("key")
@@ -290,15 +400,23 @@ class MacOSDesktopEnvironment:
                 keys = _normalize_keys(key)
                 if not keys:
                     return error("press requires a non-empty key list")
+                pre_ids = self._capture_pre_state()
                 pyautogui.hotkey(*keys)
-                await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return ok(method=ExecutionMethod.KEYBOARD)
+                changed = await self._wait_for_readiness(pre_ids)
+                return ok(
+                    method=ExecutionMethod.KEYBOARD,
+                    state_changed=changed,
+                )
 
             case ActionType.SCROLL:
+                pre_ids = self._capture_pre_state()
                 clicks = params.get("delta_y", 0)
                 pyautogui.scroll(int(clicks))
-                await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return ok(method=ExecutionMethod.COORDINATES)
+                changed = await self._wait_for_readiness(pre_ids)
+                return ok(
+                    method=ExecutionMethod.COORDINATES,
+                    state_changed=changed,
+                )
 
             case ActionType.WAIT:
                 ms = params.get("ms", 1000)
@@ -337,7 +455,7 @@ class MacOSDesktopEnvironment:
                 if is_app_switch and pre_app is not None:
                     await _wait_for_app_focus_change(pre_app)
                 else:
-                    await asyncio.sleep(_ACTION_SETTLE_DELAY)
+                    await asyncio.sleep(_READINESS_MIN_WAIT)
                 return ok(method=ExecutionMethod.SHELL)
 
             case ActionType.MOVE:

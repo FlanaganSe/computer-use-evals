@@ -216,7 +216,14 @@ Exit criteria (all met):
 - the structured-state adapter prompt history shows real previous outcomes (not "pending")
 - trace and report artifacts expose structured execution results via `RuntimeResult.summary`
 
-#### Milestone 3: Post-action verification, readiness, and stagnation handling
+#### ~~Milestone 3: Post-action verification, readiness, and stagnation handling~~ ✓ COMPLETE (2026-04-05)
+
+- [x] Step 1 — Add state-diff helpers, AXQuality dataclass, update RuntimeResult constructors → verify: `uv run pytest tests/test_runtime_results.py tests/test_macos_env.py -q` (80 passed)
+- [x] Step 2 — Replace fixed settle with readiness polling; populate state_changed; treat AXPress errors as provisional when state changed → verify: `uv run pytest tests/test_macos_env.py -q` (58 passed)
+- [x] Step 3 — Add runner-owned stagnation/loop detection with tests → verify: `uv run pytest tests/test_stagnation.py -q` (15 passed)
+- [x] Step 4 — Record per-step AX-quality metrics; surface in reporting → verify: `uv run pytest tests/test_detailed_report.py tests/test_structured_state_desktop.py -q` (76 passed)
+- [x] Step 5 — Full gate: ruff + mypy + pytest → verify: 414 passed, mypy clean, ruff clean
+Commit: "post-action verification, readiness polling, and stagnation detection"
 
 Scope:
 

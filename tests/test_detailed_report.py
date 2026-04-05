@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from harness.reporting import (
+    _format_runtime_verification,
     avg_latency_ms,
     cost_per_success,
     failure_distribution,
     generate_detailed_report,
+    generate_report,
     semantic_action_ratio,
     step_success_rate,
 )
-from harness.types import GraderResult, StepRecord, Trace
+from harness.types import GraderResult, StepRecord, Task, Trace
 
 
 def _make_step(
@@ -20,12 +23,14 @@ def _make_step(
     action: dict | None = None,
     result: str = "ok",
     ts: datetime | None = None,
+    metrics: dict | None = None,
 ) -> StepRecord:
     return StepRecord(
         step=step,
         action=action or {"type": "click", "selector": "#btn"},
         result=result,
         timestamp=ts or datetime(2026, 4, 1, tzinfo=UTC),
+        metrics=metrics,
     )
 
 
@@ -350,3 +355,129 @@ class TestGenerateDetailedReport:
         assert "## Structured-State Desktop" in report
         # Baseline has no routing metadata, so should show dashes
         assert "\u2014" in report
+
+
+# ---------------------------------------------------------------------------
+# Runtime verification reporting (M3)
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeVerification:
+    def test_format_state_change_summary(self) -> None:
+        steps = [
+            _make_step(1, metrics={"state_changed": True}),
+            _make_step(2, metrics={"state_changed": False}),
+            _make_step(3, metrics={"state_changed": None}),
+        ]
+        lines = _format_runtime_verification(steps)
+        text = "\n".join(lines)
+        assert "1 yes" in text
+        assert "1 no" in text
+        assert "1 unknown" in text
+
+    def test_format_stagnation_detected(self) -> None:
+        steps = [
+            _make_step(1, metrics={"stagnation_detected": True}),
+        ]
+        lines = _format_runtime_verification(steps)
+        text = "\n".join(lines)
+        assert "Stagnation detected" in text
+
+    def test_format_ax_quality(self) -> None:
+        steps = [
+            _make_step(
+                1,
+                metrics={
+                    "state_changed": True,
+                    "interactive_total": 10,
+                    "interactive_with_bounds": 8,
+                    "interactive_without_bounds": 2,
+                },
+            ),
+            _make_step(
+                2,
+                metrics={
+                    "state_changed": True,
+                    "interactive_total": 12,
+                    "interactive_with_bounds": 10,
+                    "interactive_without_bounds": 2,
+                },
+            ),
+        ]
+        lines = _format_runtime_verification(steps)
+        text = "\n".join(lines)
+        assert "Avg interactive elements" in text
+        assert "with bounds" in text
+
+    def test_no_stagnation_line_when_none(self) -> None:
+        steps = [
+            _make_step(1, metrics={"state_changed": True}),
+        ]
+        lines = _format_runtime_verification(steps)
+        text = "\n".join(lines)
+        assert "Stagnation" not in text
+
+    def test_report_includes_verification_section(self, tmp_path: Path) -> None:
+        """generate_report should include runtime verification when steps have metrics."""
+        task = Task(
+            task_id="test-task",
+            version="1.0",
+            goal={"description": "Test"},
+            verification={"primary": {"method": "programmatic", "check": "file_exists('x')"}},
+        )
+        steps = [
+            StepRecord(
+                step=1,
+                action={"type": "click", "x": 100, "y": 200},
+                result="ok",
+                metrics={
+                    "state_changed": True,
+                    "action_transport": "coordinates",
+                    "target_found": True,
+                    "interactive_total": 5,
+                    "interactive_with_bounds": 3,
+                    "interactive_without_bounds": 2,
+                },
+            ),
+        ]
+        trace = Trace(
+            task_id="test-task",
+            adapter="test",
+            started_at=datetime(2026, 4, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 4, 1, 0, 1, tzinfo=UTC),
+            steps=steps,
+            outcome="pass",
+            total_steps=1,
+        )
+        grade_result = GraderResult(passed=True, method="test", explanation="OK")
+        report = generate_report(task, trace, grade_result, tmp_path)
+        assert "## Runtime Verification" in report
+        assert "State changed" in report
+
+    def test_report_omits_verification_without_metrics(self, tmp_path: Path) -> None:
+        """generate_report should not include runtime verification without metrics."""
+        task = Task(
+            task_id="test-task",
+            version="1.0",
+            goal={"description": "Test"},
+            verification={"primary": {"method": "programmatic", "check": "file_exists('x')"}},
+        )
+        steps = [
+            StepRecord(
+                step=1,
+                action={"type": "click", "x": 100, "y": 200},
+                result="ok",
+            ),
+        ]
+        trace = Trace(
+            task_id="test-task",
+            adapter="test",
+            started_at=datetime(2026, 4, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 4, 1, 0, 1, tzinfo=UTC),
+            steps=steps,
+            outcome="pass",
+            total_steps=1,
+        )
+        grade_result = GraderResult(passed=True, method="test", explanation="OK")
+        report = generate_report(task, trace, grade_result, tmp_path)
+        assert "Runtime Verification" not in report

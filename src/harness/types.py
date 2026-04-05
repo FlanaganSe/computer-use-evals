@@ -152,6 +152,7 @@ class StepRecord(BaseModel):
     result: str
     error: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    metrics: dict[str, Any] | None = None
 
 
 class Trace(BaseModel):

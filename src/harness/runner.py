@@ -63,6 +63,85 @@ def _flatten_action(action: Action) -> dict[str, Any]:
     return {"type": action.action_type.value, **action.params}
 
 
+# ---------------------------------------------------------------------------
+# Stagnation / loop detection
+# ---------------------------------------------------------------------------
+
+# Consecutive repeated actions with no state change before stagnation is declared
+_STAGNATION_THRESHOLD = 3
+
+# Maximum repeated identical-signature window to check
+_STAGNATION_WINDOW = 5
+
+
+def _action_signature(action: Action) -> str:
+    """Create a stable signature for stagnation detection.
+
+    Includes enough detail to distinguish meaningfully different actions
+    but not so much that legitimate retries look novel. Type and value
+    tokens are hashed to keep signatures compact. Scroll delta_y is
+    excluded so repeated scrolling in the same direction is detected.
+    """
+    p = action.params
+    parts = [
+        action.action_type.value,
+        str(p.get("semantic_target", "")),
+        str(p.get("x", "")),
+        str(p.get("y", "")),
+        str(p.get("text", "")),
+        str(p.get("key", "")),
+    ]
+    return "|".join(parts)
+
+
+class _StagnationTracker:
+    """Tracks repeated actions and unchanged state for loop detection.
+
+    The runner owns this tracker. When stagnation is detected, the runner
+    terminates the loop with an explicit reason.
+    """
+
+    __slots__ = ("_history",)
+
+    def __init__(self) -> None:
+        self._history: list[tuple[str, bool | None]] = []
+
+    def record(self, signature: str, state_changed: bool | None) -> None:
+        self._history.append((signature, state_changed))
+        if len(self._history) > _STAGNATION_WINDOW:
+            self._history = self._history[-_STAGNATION_WINDOW:]
+
+    def is_stagnating(self) -> bool:
+        """Check if the last N actions have the same signature with no state change."""
+        if len(self._history) < _STAGNATION_THRESHOLD:
+            return False
+        recent = self._history[-_STAGNATION_THRESHOLD:]
+        sig = recent[0][0]
+        return all(s == sig and changed is not True for s, changed in recent)
+
+
+def _build_step_metrics(rt_result: RuntimeResult, env: Any) -> dict[str, Any]:
+    """Build per-step metrics dict from the runtime result and environment.
+
+    Captures the minimal metric set for research analysis:
+    - action_transport: execution method used
+    - target_found: whether target was resolved
+    - state_changed: whether UI state changed
+    - AX quality from the environment (if available)
+    """
+    metrics: dict[str, Any] = {
+        "action_transport": rt_result.execution_method.value,
+        "target_found": rt_result.target_resolved,
+        "state_changed": rt_result.state_changed,
+    }
+    # Pull AX quality from the environment if it supports it
+    if hasattr(env, "get_ax_quality"):
+        ax_q = env.get_ax_quality()
+        if ax_q is not None:
+            metrics.update(ax_q.to_dict())
+    return metrics
+
+
 def run_task(
     task_path: str,
     adapter_name: str,
@@ -122,6 +201,7 @@ async def _run_task_async(
         # Main loop
         step_num = 0
         loop_done = False
+        stagnation = _StagnationTracker()
         for _ in range(max_steps):
             obs_type = adapter.observation_request()
             observation = await env.collect_observation(obs_type)
@@ -181,14 +261,41 @@ async def _run_task_async(
                     loop_done = True
                     break
 
+                step_metrics = _build_step_metrics(rt_result, env)
                 trace.steps.append(
                     StepRecord(
                         step=step_num,
                         action=_flatten_action(action),
                         result=rt_result.summary,
+                        metrics=step_metrics,
                     )
                 )
                 adapter.notify_result(action, rt_result)
+
+                # Stagnation detection: track signature + state change
+                sig = _action_signature(action)
+                stagnation.record(sig, rt_result.state_changed)
+                if stagnation.is_stagnating():
+                    logger.warning(
+                        "Stagnation detected at step %d: repeated %r with no state change",
+                        step_num,
+                        action.action_type.value,
+                    )
+                    stagnation_result = rt_fail("stagnation: repeated action with no state change")
+                    # Record stagnation on the same step (runner decision, not a new agent step)
+                    trace.steps.append(
+                        StepRecord(
+                            step=step_num,
+                            action={"type": "fail", "reason": "stagnation"},
+                            result=stagnation_result.summary,
+                            error="stagnation: repeated action with no state change",
+                            metrics={"stagnation_detected": True},
+                        )
+                    )
+                    trace.outcome = "fail"
+                    trace.failure_category = FailureCategory.CONTEXT
+                    loop_done = True
+                    break
 
             if loop_done:
                 break

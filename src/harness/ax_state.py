@@ -8,6 +8,7 @@ and interactive-element filtering for the structured-state desktop adapter.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 from typing import Any
@@ -414,3 +415,73 @@ def coverage_stats(root: AXNode) -> dict[str, Any]:
         "nodes_with_bounds": has_bounds,
         "roles": roles,
     }
+
+
+# ---------------------------------------------------------------------------
+# State-diff: interactive element ID snapshots for change detection
+# ---------------------------------------------------------------------------
+
+
+def interactive_id_set(root: AXNode) -> frozenset[str]:
+    """Extract the set of interactive element IDs for state-diff comparison.
+
+    Used to detect whether the AX tree changed after an action by comparing
+    pre-action and post-action ID sets. A changed set means interactive
+    elements appeared, disappeared, or were re-identified.
+    """
+    ids: list[str] = []
+
+    def _walk(node: AXNode) -> None:
+        if node.is_interactive and node.enabled:
+            ids.append(node.node_id)
+        for child in node.children:
+            _walk(child)
+
+    _walk(root)
+    return frozenset(ids)
+
+
+def state_changed(pre_ids: frozenset[str], post_ids: frozenset[str]) -> bool | None:
+    """Determine whether the UI state changed based on interactive ID sets.
+
+    Returns True if the sets differ, False if identical, None if either set
+    is empty (cannot reliably determine change when the tree is empty).
+    """
+    if not pre_ids and not post_ids:
+        return None
+    return pre_ids != post_ids
+
+
+# ---------------------------------------------------------------------------
+# AX quality metrics
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AXQuality:
+    """Per-step AX quality metrics for research analysis.
+
+    Tracks the minimal set of signals needed to distinguish poor AX substrate
+    from bad planning in later analysis.
+    """
+
+    interactive_total: int
+    interactive_with_bounds: int
+    interactive_without_bounds: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "interactive_total": self.interactive_total,
+            "interactive_with_bounds": self.interactive_with_bounds,
+            "interactive_without_bounds": self.interactive_without_bounds,
+        }
+
+
+def compute_ax_quality(nodes: list[AXNode]) -> AXQuality:
+    """Compute AX quality metrics from a list of interactive nodes."""
+    with_bounds = sum(1 for n in nodes if n.bounds is not None)
+    return AXQuality(
+        interactive_total=len(nodes),
+        interactive_with_bounds=with_bounds,
+        interactive_without_bounds=len(nodes) - with_bounds,
+    )

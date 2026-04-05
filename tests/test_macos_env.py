@@ -175,12 +175,22 @@ class TestObservation:
 
 
 class TestActionExecution:
+    def _make_env(self) -> MacOSDesktopEnvironment:
+        """Create env with readiness polling stubbed out for unit tests."""
+        env = MacOSDesktopEnvironment()
+
+        async def _noop_readiness(_pre_ids: Any) -> None:
+            return None  # type: ignore[return-value]
+
+        env._wait_for_readiness = _noop_readiness  # type: ignore[assignment]
+        return env
+
     def _run_action(self, env: MacOSDesktopEnvironment, action: Action) -> RuntimeResult:
         return asyncio.run(env.execute_action(action))
 
     @patch("pyautogui.click")
     def test_click_action(self, mock_click: MagicMock) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.CLICK, params={"x": 100, "y": 200})
         result = self._run_action(env, action)
         assert result.summary == "ok"
@@ -188,7 +198,7 @@ class TestActionExecution:
         mock_click.assert_called_once_with(100, 200)
 
     def test_click_without_coords(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.CLICK, params={})
         result = self._run_action(env, action)
         assert result.summary.startswith("error")
@@ -196,7 +206,7 @@ class TestActionExecution:
 
     @patch("pyautogui.write")
     def test_type_action(self, mock_write: MagicMock) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.TYPE, params={"text": "hello"})
         result = self._run_action(env, action)
         assert result.summary == "ok"
@@ -205,7 +215,7 @@ class TestActionExecution:
 
     @patch("pyautogui.hotkey")
     def test_press_action(self, mock_hotkey: MagicMock) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.PRESS, params={"key": "command+s"})
         result = self._run_action(env, action)
         assert result.summary == "ok"
@@ -213,7 +223,7 @@ class TestActionExecution:
 
     @patch("pyautogui.hotkey")
     def test_press_unicode_symbols(self, mock_hotkey: MagicMock) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.PRESS, params={"key": "\u2318S"})
         result = self._run_action(env, action)
         assert result.summary == "ok"
@@ -221,7 +231,7 @@ class TestActionExecution:
 
     @patch("pyautogui.hotkey")
     def test_press_ascii_aliases(self, mock_hotkey: MagicMock) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.PRESS, params={"key": "CMD+SHIFT+S"})
         result = self._run_action(env, action)
         assert result.summary == "ok"
@@ -230,14 +240,14 @@ class TestActionExecution:
     @patch("pyautogui.hotkey")
     def test_press_action_with_list_key(self, mock_hotkey: MagicMock) -> None:
         """press_keys with list key param must not crash (B3)."""
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.PRESS, params={"key": ["CMD", "SHIFT", "S"]})
         result = self._run_action(env, action)
         assert result.summary == "ok"
         mock_hotkey.assert_called_once_with("command", "shift", "s")
 
     def test_shell_action_success(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(
             action_type=ActionType.SHELL,
             params={"command": "osascript", "args": ["-e", 'return "ok"']},
@@ -247,7 +257,7 @@ class TestActionExecution:
         assert result.execution_method == ExecutionMethod.SHELL
 
     def test_shell_action_blocked_command(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(
             action_type=ActionType.SHELL,
             params={"command": "/bin/sh", "args": ["-c", "echo pwned"]},
@@ -256,20 +266,20 @@ class TestActionExecution:
         assert "not in allowlist" in result.summary
 
     def test_type_without_text_param(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.TYPE, params={})
         result = self._run_action(env, action)
         assert result.summary.startswith("error")
 
     def test_press_without_key_param(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.PRESS, params={})
         result = self._run_action(env, action)
         assert result.summary.startswith("error")
 
     def test_shell_open_app_waits_for_focus(self) -> None:
         """open -a command should wait for frontmost app to change."""
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(
             action_type=ActionType.SHELL,
             params={"command": "open", "args": ["-a", "TextEdit"]},
@@ -301,7 +311,7 @@ class TestActionExecution:
 
     def test_shell_non_app_switch_uses_settle_delay(self) -> None:
         """Regular osascript commands should not poll for focus change."""
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(
             action_type=ActionType.SHELL,
             params={"command": "osascript", "args": ["-e", 'return "ok"']},
@@ -324,19 +334,19 @@ class TestActionExecution:
         )
 
     def test_wait_action(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.WAIT, params={"ms": 10})
         result = self._run_action(env, action)
         assert result.summary == "ok"
 
     def test_done_action(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.DONE)
         result = self._run_action(env, action)
         assert result.summary == "done"
 
     def test_fail_action(self) -> None:
-        env = MacOSDesktopEnvironment()
+        env = self._make_env()
         action = Action(action_type=ActionType.FAIL, params={"reason": "test"})
         result = self._run_action(env, action)
         assert result.summary == "fail:test"
@@ -544,6 +554,156 @@ class TestDeterministicDesktopScript:
         assert actions[0].params["command"] == "osascript"
         assert "TextEdit" in actions[0].params["args"][1]
         assert actions[1].action_type == ActionType.DONE
+
+
+# ---------------------------------------------------------------------------
+# Environment selection
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Readiness polling and state-diff verification (M3)
+# ---------------------------------------------------------------------------
+
+
+class TestReadinessPolling:
+    """Tests for bounded readiness polling replacing fixed settle delay."""
+
+    def test_click_populates_state_changed(self) -> None:
+        """Click action should set state_changed on the result."""
+        env = MacOSDesktopEnvironment()
+
+        async def _readiness_true(_pre_ids: Any) -> bool:
+            return True
+
+        env._wait_for_readiness = _readiness_true  # type: ignore[assignment]
+
+        with patch("pyautogui.click"):
+            result = asyncio.run(
+                env.execute_action(Action(action_type=ActionType.CLICK, params={"x": 10, "y": 20}))
+            )
+        assert result.state_changed is True
+
+    def test_click_state_unchanged(self) -> None:
+        env = MacOSDesktopEnvironment()
+
+        async def _readiness_false(_pre_ids: Any) -> bool:
+            return False
+
+        env._wait_for_readiness = _readiness_false  # type: ignore[assignment]
+
+        with patch("pyautogui.click"):
+            result = asyncio.run(
+                env.execute_action(Action(action_type=ActionType.CLICK, params={"x": 10, "y": 20}))
+            )
+        assert result.state_changed is False
+
+    def test_readiness_returns_early_on_change(self) -> None:
+        """_wait_for_readiness should return True when post-state differs from pre."""
+        env = MacOSDesktopEnvironment()
+        pre_ids = frozenset({"ax_1", "ax_2"})
+        # Simulate post-state that differs by one element
+        post_ids = frozenset({"ax_1", "ax_2", "ax_3"})
+
+        call_count = 0
+
+        def mock_get_post_ids() -> frozenset[str]:
+            nonlocal call_count
+            call_count += 1
+            return post_ids
+
+        env._get_post_state_ids = mock_get_post_ids  # type: ignore[assignment]
+        result = asyncio.run(env._wait_for_readiness(pre_ids))
+        assert result is True
+        # Should have needed very few polls (ideally 1 after the min wait)
+        assert call_count >= 1
+
+    def test_readiness_returns_false_on_timeout(self) -> None:
+        """_wait_for_readiness should return False when state never changes."""
+        from harness.environments import macos
+
+        # Temporarily reduce timeout for test speed
+        orig_max = macos._READINESS_MAX_WAIT
+        orig_min = macos._READINESS_MIN_WAIT
+        macos._READINESS_MAX_WAIT = 0.3
+        macos._READINESS_MIN_WAIT = 0.05
+        try:
+            env = MacOSDesktopEnvironment()
+            pre_ids = frozenset({"ax_1", "ax_2"})
+            env._get_post_state_ids = lambda: pre_ids  # type: ignore[assignment]
+
+            result = asyncio.run(env._wait_for_readiness(pre_ids))
+            assert result is False
+        finally:
+            macos._READINESS_MAX_WAIT = orig_max
+            macos._READINESS_MIN_WAIT = orig_min
+
+    def test_readiness_returns_none_on_empty_pre(self) -> None:
+        """When pre_ids is empty (no tree), return None and fall through."""
+        env = MacOSDesktopEnvironment()
+        from harness.environments import macos
+
+        orig = macos._READINESS_MIN_WAIT
+        macos._READINESS_MIN_WAIT = 0.01
+        try:
+            result = asyncio.run(env._wait_for_readiness(frozenset()))
+            assert result is None
+        finally:
+            macos._READINESS_MIN_WAIT = orig
+
+
+class TestAXPressErrorOverride:
+    """AXPress transport error should be overridden when state evidence shows success."""
+
+    def test_ax_press_error_overridden_by_state_change(self) -> None:
+        """If AXPress fails but state changed, result should be ok."""
+        env = MacOSDesktopEnvironment()
+        env._last_ax_refs = {"ax_target": MagicMock()}
+
+        # AXPress will fail (returns non-zero error code)
+        with patch(
+            "harness.environments.macos.MacOSDesktopEnvironment._try_ax_press",
+            return_value=False,
+        ):
+            # But state will change
+            async def _readiness_true(_pre_ids: Any) -> bool:
+                return True
+
+            env._wait_for_readiness = _readiness_true  # type: ignore[assignment]
+
+            action = Action(
+                action_type=ActionType.CLICK,
+                params={"semantic_target": "ax_target"},
+            )
+            result = asyncio.run(env.execute_action(action))
+
+        assert result.status.value == "ok"
+        assert result.state_changed is True
+        assert result.metadata.get("ax_press_transport_error") is True
+
+    def test_ax_press_error_not_overridden_without_state_change(self) -> None:
+        """If AXPress fails and no state change, result should be error."""
+        env = MacOSDesktopEnvironment()
+        env._last_ax_refs = {"ax_target": MagicMock()}
+
+        with patch(
+            "harness.environments.macos.MacOSDesktopEnvironment._try_ax_press",
+            return_value=False,
+        ):
+
+            async def _readiness_false(_pre_ids: Any) -> bool:
+                return False
+
+            env._wait_for_readiness = _readiness_false  # type: ignore[assignment]
+
+            action = Action(
+                action_type=ActionType.CLICK,
+                params={"semantic_target": "ax_target"},
+            )
+            result = asyncio.run(env.execute_action(action))
+
+        assert result.status.value == "error"
+        assert result.target_resolved is False
 
 
 # ---------------------------------------------------------------------------

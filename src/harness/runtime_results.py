@@ -144,6 +144,7 @@ def ok(
     *,
     method: ExecutionMethod = ExecutionMethod.OTHER,
     target_resolved: bool = True,
+    state_changed: bool | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> RuntimeResult:
     """Create an OK result."""
@@ -152,6 +153,7 @@ def ok(
         message=message,
         execution_method=method,
         target_resolved=target_resolved,
+        state_changed=state_changed,
         metadata=metadata,
     )
 
@@ -161,6 +163,8 @@ def error(
     *,
     method: ExecutionMethod = ExecutionMethod.OTHER,
     target_resolved: bool = False,
+    state_changed: bool | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> RuntimeResult:
     """Create an error result."""
     return RuntimeResult(
@@ -168,6 +172,8 @@ def error(
         message=message,
         execution_method=method,
         target_resolved=target_resolved,
+        state_changed=state_changed,
+        metadata=metadata,
     )
 
 
