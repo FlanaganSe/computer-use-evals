@@ -57,6 +57,21 @@ uv run python -m harness compare --runs-dir runs --detailed
 
 Config-driven runs produce normal per-run artifacts in `runs/` and print a comparison summary when complete.
 
+### Capture evidence for authoring
+
+```bash
+# Standard interval-only capture (screenshots every 2s)
+uv run python -m harness capture --output evidence/my-task --name my-task
+
+# Event-aligned capture (additional screenshots on clicks and app switches)
+uv run python -m harness capture --output evidence/my-task --name my-task --aligned
+
+# With ARIA/AX state snapshots
+uv run python -m harness capture --output evidence/my-task --name my-task --aligned --aria
+```
+
+In aligned mode, the manifest includes an `aligned_timeline` that correlates each screenshot with the user action that triggered it (click, app switch, or periodic interval). The authoring pipeline (`harness author`) automatically uses aligned evidence when present, producing higher-quality draft tasks.
+
 ### Inspect results
 
 Each run creates a timestamped directory under `runs/`:

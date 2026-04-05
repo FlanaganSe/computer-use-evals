@@ -203,6 +203,90 @@ def group_events(events: list[dict[str, Any]]) -> list[str]:
     return descriptions
 
 
+# ---------------------------------------------------------------------------
+# Aligned timeline helpers
+# ---------------------------------------------------------------------------
+
+
+def build_aligned_events_context(timeline: list[dict[str, Any]]) -> str:
+    """Build an events-context string from an aligned timeline.
+
+    Each line correlates a user action with a numbered screenshot so the
+    VLM can reason about exactly what happened at each capture point.
+    """
+    if not timeline:
+        return ""
+
+    # Assign sequential screenshot numbers
+    screenshot_refs: dict[str, int] = {}
+    idx = 0
+    for entry in timeline:
+        ref = entry.get("screenshot", "")
+        if ref and ref not in screenshot_refs:
+            idx += 1
+            screenshot_refs[ref] = idx
+
+    lines: list[str] = []
+    for entry in timeline:
+        t = entry.get("t", 0.0)
+        trigger = entry.get("trigger", "unknown")
+        ref = entry.get("screenshot", "")
+        if not ref or ref not in screenshot_refs:
+            continue  # skip entries without a valid screenshot reference
+        num = screenshot_refs[ref]
+
+        app_ctx = entry.get("app_context")
+        app_label = f" in {app_ctx['app']}" if app_ctx and app_ctx.get("app") else ""
+
+        if trigger == "click":
+            ev = entry.get("event", {})
+            x, y = ev.get("x", 0), ev.get("y", 0)
+            lines.append(f"At t={t}s: Click at ({x}, {y}){app_label} → Screenshot #{num}")
+        elif trigger == "focus_change":
+            ev = entry.get("event", {})
+            from_app = ev.get("from_app", "unknown")
+            to_app = ev.get("to_app", "unknown")
+            lines.append(f"At t={t}s: App switch from {from_app} to {to_app} → Screenshot #{num}")
+        elif trigger == "interval":
+            lines.append(f"At t={t}s: Periodic capture{app_label} → Screenshot #{num}")
+        else:
+            lines.append(f"At t={t}s: {trigger}{app_label} → Screenshot #{num}")
+
+    return (
+        "Here is a timeline of the user's actions during the recording, "
+        "aligned with the numbered screenshots provided. Each screenshot "
+        "number corresponds to the image in that position in the image "
+        "sequence below. This is ground truth — use this alignment to "
+        "understand exactly what the user was doing at each capture point:\n\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
+def select_aligned_screenshots(
+    screenshots_dir: Path,
+    timeline: list[dict[str, Any]],
+    max_frames: int = 10,
+) -> list[Path]:
+    """Select screenshots referenced in the aligned timeline.
+
+    Preserves timeline order.  If there are more references than
+    *max_frames*, evenly samples while keeping first and last.
+    """
+    seen: set[str] = set()
+    unique_refs: list[str] = []
+    for entry in timeline:
+        ref = entry.get("screenshot", "")
+        if ref and ref not in seen:
+            seen.add(ref)
+            unique_refs.append(ref)
+
+    paths = [screenshots_dir / r for r in unique_refs if (screenshots_dir / r).exists()]
+    if len(paths) > max_frames:
+        paths = sample_frames(paths, max_frames=max_frames)
+    return paths
+
+
 _MAX_ARIA_SAMPLES = 5
 _MAX_ARIA_CHARS = 2000
 
@@ -343,6 +427,11 @@ def extract_intent(
 ) -> str:
     """Send evidence to a VLM and get back raw YAML text.
 
+    When the manifest contains an ``aligned_timeline`` (from aligned
+    capture mode), screenshots and events context are derived from
+    that timeline for tighter correlation. Otherwise falls back to
+    the standard evenly-sampled approach.
+
     Requires OPENAI_API_KEY in environment.
     """
     manifest = load_evidence(evidence_dir)
@@ -352,7 +441,37 @@ def extract_intent(
     if not all_screenshots:
         msg = f"No screenshots found in {screenshots_dir}"
         raise FileNotFoundError(msg)
-    sampled = sample_frames(all_screenshots)
+
+    raw_timeline = manifest.get("aligned_timeline")
+    aligned_timeline: list[dict[str, Any]] | None = (
+        raw_timeline if isinstance(raw_timeline, list) else None
+    )
+
+    if aligned_timeline:
+        # Aligned mode: use timeline-correlated screenshots and context
+        sampled = select_aligned_screenshots(screenshots_dir, aligned_timeline)
+        if not sampled:
+            sampled = sample_frames(all_screenshots)
+        # Filter timeline to entries whose screenshots are in the sampled set
+        # so prompt screenshot numbers match the actual image sequence
+        sampled_names = {p.name for p in sampled}
+        visible_timeline = [e for e in aligned_timeline if e.get("screenshot") in sampled_names]
+        events_context: str | None = build_aligned_events_context(visible_timeline) or None
+    else:
+        # Standard mode: evenly sample screenshots, group events separately
+        sampled = sample_frames(all_screenshots)
+        events_context = None
+        events = load_events(evidence_dir)
+        if events:
+            grouped = group_events(events)
+            if grouped:
+                events_context = (
+                    "Here is the exact timeline of the user's keyboard, mouse, "
+                    "and scroll input during the recording. This is ground truth — "
+                    "these are the actual actions the user performed:\n\n"
+                    + "\n".join(grouped)
+                    + "\n\n"
+                )
 
     aria_samples: list[tuple[int, str]] | None = None
     if manifest.get("has_aria"):
@@ -362,19 +481,6 @@ def extract_intent(
     transcript_path = evidence_dir / "transcript.txt"
     if transcript_path.exists():
         transcript = transcript_path.read_text()
-
-    events_context: str | None = None
-    events = load_events(evidence_dir)
-    if events:
-        grouped = group_events(events)
-        if grouped:
-            events_context = (
-                "Here is the exact timeline of the user's keyboard, mouse, "
-                "and scroll input during the recording. This is ground truth — "
-                "these are the actual actions the user performed:\n\n"
-                + "\n".join(grouped)
-                + "\n\n"
-            )
 
     prompt_text = build_prompt(
         manifest,

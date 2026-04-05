@@ -10,12 +10,14 @@ import pytest
 
 from harness.intent_extract import (
     _truncate_aria,
+    build_aligned_events_context,
     build_messages,
     build_prompt,
     load_evidence,
     load_sampled_aria,
     parse_draft_task,
     sample_frames,
+    select_aligned_screenshots,
 )
 
 # ---------------------------------------------------------------------------
@@ -487,3 +489,245 @@ class TestBuildPromptSampledAria:
         manifest = {"capture_interval_ms": 2000}
         prompt = build_prompt(manifest)
         assert "accessibility tree" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# build_aligned_events_context
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAlignedEventsContext:
+    def test_empty_timeline(self) -> None:
+        assert build_aligned_events_context([]) == ""
+
+    def test_click_entry(self) -> None:
+        timeline = [
+            {
+                "t": 1.2,
+                "epoch": 1000.0,
+                "trigger": "click",
+                "screenshot": "0001_1000.png",
+                "event": {"type": "mouse", "button": "left", "x": 500, "y": 300},
+                "app_context": {"app": "TextEdit"},
+            },
+        ]
+        ctx = build_aligned_events_context(timeline)
+        assert "Click at (500, 300)" in ctx
+        assert "in TextEdit" in ctx
+        assert "Screenshot #1" in ctx
+
+    def test_focus_change_entry(self) -> None:
+        timeline = [
+            {
+                "t": 3.0,
+                "epoch": 1003.0,
+                "trigger": "focus_change",
+                "screenshot": "0002_1003.png",
+                "event": {"type": "focus", "from_app": "TextEdit", "to_app": "Safari"},
+            },
+        ]
+        ctx = build_aligned_events_context(timeline)
+        assert "App switch from TextEdit to Safari" in ctx
+        assert "Screenshot #1" in ctx
+
+    def test_interval_entry(self) -> None:
+        timeline = [
+            {
+                "t": 0.0,
+                "epoch": 1000.0,
+                "trigger": "interval",
+                "screenshot": "0001_1000.png",
+                "app_context": {"app": "Safari"},
+            },
+        ]
+        ctx = build_aligned_events_context(timeline)
+        assert "Periodic capture" in ctx
+        assert "in Safari" in ctx
+
+    def test_screenshot_numbering_sequential(self) -> None:
+        timeline = [
+            {"t": 0.0, "epoch": 1000.0, "trigger": "interval", "screenshot": "0001.png"},
+            {
+                "t": 1.0,
+                "epoch": 1001.0,
+                "trigger": "click",
+                "screenshot": "0002.png",
+                "event": {"type": "mouse", "x": 0, "y": 0},
+            },
+            {"t": 2.0, "epoch": 1002.0, "trigger": "interval", "screenshot": "0003.png"},
+        ]
+        ctx = build_aligned_events_context(timeline)
+        assert "Screenshot #1" in ctx
+        assert "Screenshot #2" in ctx
+        assert "Screenshot #3" in ctx
+
+    def test_ground_truth_framing(self) -> None:
+        timeline = [
+            {"t": 0.0, "epoch": 1000.0, "trigger": "interval", "screenshot": "0001.png"},
+        ]
+        ctx = build_aligned_events_context(timeline)
+        assert "ground truth" in ctx.lower()
+
+
+# ---------------------------------------------------------------------------
+# select_aligned_screenshots
+# ---------------------------------------------------------------------------
+
+
+class TestSelectAlignedScreenshots:
+    def test_selects_referenced_screenshots(self, tmp_path: Path) -> None:
+        screenshots_dir = tmp_path / "screenshots"
+        screenshots_dir.mkdir()
+        (screenshots_dir / "0001_1000.png").write_bytes(b"\x89PNG")
+        (screenshots_dir / "0002_1002.png").write_bytes(b"\x89PNG")
+        (screenshots_dir / "0003_1004.png").write_bytes(b"\x89PNG")
+
+        timeline = [
+            {"t": 0.0, "screenshot": "0001_1000.png"},
+            {"t": 2.0, "screenshot": "0003_1004.png"},
+        ]
+        result = select_aligned_screenshots(screenshots_dir, timeline)
+        assert len(result) == 2
+        assert result[0].name == "0001_1000.png"
+        assert result[1].name == "0003_1004.png"
+
+    def test_deduplicates_references(self, tmp_path: Path) -> None:
+        screenshots_dir = tmp_path / "screenshots"
+        screenshots_dir.mkdir()
+        (screenshots_dir / "0001_1000.png").write_bytes(b"\x89PNG")
+
+        timeline = [
+            {"t": 0.0, "screenshot": "0001_1000.png"},
+            {"t": 1.0, "screenshot": "0001_1000.png"},
+        ]
+        result = select_aligned_screenshots(screenshots_dir, timeline)
+        assert len(result) == 1
+
+    def test_skips_missing_files(self, tmp_path: Path) -> None:
+        screenshots_dir = tmp_path / "screenshots"
+        screenshots_dir.mkdir()
+        (screenshots_dir / "0001_1000.png").write_bytes(b"\x89PNG")
+
+        timeline = [
+            {"t": 0.0, "screenshot": "0001_1000.png"},
+            {"t": 1.0, "screenshot": "0099_missing.png"},
+        ]
+        result = select_aligned_screenshots(screenshots_dir, timeline)
+        assert len(result) == 1
+
+    def test_samples_when_over_limit(self, tmp_path: Path) -> None:
+        screenshots_dir = tmp_path / "screenshots"
+        screenshots_dir.mkdir()
+        timeline = []
+        for i in range(20):
+            name = f"{i:04d}_1000.png"
+            (screenshots_dir / name).write_bytes(b"\x89PNG")
+            timeline.append({"t": float(i), "screenshot": name})
+
+        result = select_aligned_screenshots(screenshots_dir, timeline, max_frames=5)
+        assert len(result) <= 5
+        # First and last should be preserved by sample_frames
+        assert result[0].name == "0000_1000.png"
+        assert result[-1].name == "0019_1000.png"
+
+    def test_empty_timeline(self, tmp_path: Path) -> None:
+        screenshots_dir = tmp_path / "screenshots"
+        screenshots_dir.mkdir()
+        result = select_aligned_screenshots(screenshots_dir, [])
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# extract_intent with aligned timeline (integration, mocked OpenAI)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractIntentAligned:
+    def test_aligned_evidence_uses_timeline_context(self, tmp_path: Path) -> None:
+        """When manifest has aligned_timeline, extract_intent uses aligned context."""
+        from harness.intent_extract import author_task
+
+        evidence_dir = _create_evidence_dir(tmp_path, num_frames=3)
+        # Add aligned_timeline to manifest
+        manifest_path = evidence_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["capture_mode"] = "aligned"
+        manifest["aligned_timeline"] = [
+            {
+                "t": 0.0,
+                "epoch": 1002.0,
+                "trigger": "interval",
+                "screenshot": "0001_1002.png",
+                "app_context": {"app": "TextEdit"},
+            },
+            {
+                "t": 1.5,
+                "epoch": 1003.5,
+                "trigger": "click",
+                "screenshot": "0002_1004.png",
+                "event": {"type": "mouse", "x": 100, "y": 200},
+                "app_context": {"app": "TextEdit"},
+            },
+            {
+                "t": 4.0,
+                "epoch": 1006.0,
+                "trigger": "interval",
+                "screenshot": "0003_1006.png",
+                "app_context": {"app": "TextEdit"},
+            },
+        ]
+        manifest_path.write_text(json.dumps(manifest))
+
+        output_path = tmp_path / "output" / "task.yaml"
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = VALID_TASK_YAML
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("harness.intent_extract.OpenAI", return_value=mock_client):
+            author_task(evidence_dir, output_path)
+
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args.kwargs.get("messages") or call_args[1].get("messages")
+        prompt_text = messages[0]["content"][0]["text"]
+        # Aligned context should be present
+        assert "Click at (100, 200)" in prompt_text
+        assert "in TextEdit" in prompt_text
+        assert "Screenshot #" in prompt_text
+
+    def test_non_aligned_evidence_uses_standard_path(self, tmp_path: Path) -> None:
+        """Without aligned_timeline, extract_intent uses standard event grouping."""
+        from harness.intent_extract import author_task
+
+        evidence_dir = _create_evidence_dir(tmp_path, num_frames=3)
+        # Add events.json
+        events_data = {
+            "capture_start_epoch": 1000.0,
+            "events": [
+                {"t": 1.0, "type": "mouse", "button": "left", "x": 50, "y": 60, "click_count": 1},
+            ],
+        }
+        (evidence_dir / "events.json").write_text(json.dumps(events_data))
+
+        output_path = tmp_path / "output" / "task.yaml"
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = VALID_TASK_YAML
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("harness.intent_extract.OpenAI", return_value=mock_client):
+            author_task(evidence_dir, output_path)
+
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args.kwargs.get("messages") or call_args[1].get("messages")
+        prompt_text = messages[0]["content"][0]["text"]
+        # Standard events context
+        assert "clicked (50, 60)" in prompt_text
+        # No aligned markers
+        assert "Screenshot #" not in prompt_text

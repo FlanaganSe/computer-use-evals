@@ -146,6 +146,13 @@ def main(argv: list[str] | None = None) -> None:
         help="Disable keyboard/mouse event recording",
     )
     capture_parser.add_argument("--name", default="untitled", help="Task name for manifest")
+    capture_parser.add_argument(
+        "--aligned",
+        action="store_true",
+        default=False,
+        help="Enable event-aligned capture: take additional screenshots on clicks "
+        "and app-focus changes, producing an aligned evidence timeline",
+    )
 
     author_parser = subparsers.add_parser("author", help="Generate draft task from evidence")
     author_parser.add_argument("evidence_dir", help="Path to evidence directory")
@@ -219,13 +226,18 @@ def main(argv: list[str] | None = None) -> None:
         capture_events = not args.no_events
         if capture_events:
             print("Recording keyboard and mouse input. Evidence may contain passwords.")
-        print(f"Capturing to {args.output} every {args.interval}s (Ctrl+C to stop)...")
+        mode_label = "aligned" if args.aligned else "interval"
+        print(
+            f"Capturing to {args.output} every {args.interval}s "
+            f"(mode={mode_label}, Ctrl+C to stop)..."
+        )
         evidence_dir = capture_session(
             output_dir=Path(args.output),
             interval_seconds=args.interval,
             capture_aria=args.aria,
             capture_events=capture_events,
             task_name=args.name,
+            aligned=args.aligned,
         )
         print(f"\nEvidence captured: {evidence_dir}")
         events = load_events(evidence_dir)

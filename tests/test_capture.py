@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import signal
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
-from harness.capture import build_manifest, capture_session
+from harness.capture import _make_timeline_entry, build_manifest, capture_session
 
 
 class TestBuildManifest:
@@ -177,3 +178,243 @@ class TestCaptureSession:
         # Check naming pattern: 0001_<timestamp>.png
         assert screenshots[0].name.startswith("0001_")
         assert screenshots[1].name.startswith("0002_")
+
+
+# ---------------------------------------------------------------------------
+# Aligned timeline entry helpers
+# ---------------------------------------------------------------------------
+
+
+class TestMakeTimelineEntry:
+    def test_minimal_entry(self) -> None:
+        entry = _make_timeline_entry(
+            t=1.234, epoch=1712345678.234, trigger="interval", screenshot="0001_123.png"
+        )
+        assert entry["t"] == 1.234
+        assert entry["epoch"] == 1712345678.234
+        assert entry["trigger"] == "interval"
+        assert entry["screenshot"] == "0001_123.png"
+        assert "event" not in entry
+        assert "ax_snapshot" not in entry
+        assert "app_context" not in entry
+
+    def test_click_entry_with_all_fields(self) -> None:
+        entry = _make_timeline_entry(
+            t=2.5,
+            epoch=1712345680.5,
+            trigger="click",
+            screenshot="0003_123.png",
+            ax_snapshot="0003.yaml",
+            event={"type": "mouse", "button": "left", "x": 500, "y": 300},
+            app_context={"app": "TextEdit", "window": "Untitled"},
+        )
+        assert entry["trigger"] == "click"
+        assert entry["ax_snapshot"] == "0003.yaml"
+        assert entry["event"]["x"] == 500
+        assert entry["app_context"]["app"] == "TextEdit"
+
+    def test_focus_change_entry(self) -> None:
+        entry = _make_timeline_entry(
+            t=5.1,
+            epoch=1712345682.1,
+            trigger="focus_change",
+            screenshot="0007_123.png",
+            event={"type": "focus", "from_app": "TextEdit", "to_app": "Safari"},
+            app_context={"app": "Safari"},
+        )
+        assert entry["trigger"] == "focus_change"
+        assert entry["event"]["from_app"] == "TextEdit"
+        assert entry["event"]["to_app"] == "Safari"
+
+
+# ---------------------------------------------------------------------------
+# build_manifest with aligned timeline
+# ---------------------------------------------------------------------------
+
+
+class TestBuildManifestAligned:
+    def test_interval_mode_default(self) -> None:
+        frames = [{"sequence": 1, "timestamp": 1000}]
+        manifest = build_manifest(
+            task_name="test", frames=frames, interval_seconds=1.0, capture_aria=False
+        )
+        assert manifest["capture_mode"] == "interval"
+        assert "aligned_timeline" not in manifest
+
+    def test_aligned_mode_with_timeline(self) -> None:
+        frames = [{"sequence": 1, "timestamp": 1000}]
+        timeline: list[dict[str, Any]] = [
+            {"t": 0.0, "epoch": 1000.0, "trigger": "interval", "screenshot": "0001_1000.png"},
+        ]
+        manifest = build_manifest(
+            task_name="test",
+            frames=frames,
+            interval_seconds=1.0,
+            capture_aria=False,
+            capture_mode="aligned",
+            aligned_timeline=timeline,
+        )
+        assert manifest["capture_mode"] == "aligned"
+        assert isinstance(manifest["aligned_timeline"], list)
+        assert len(manifest["aligned_timeline"]) == 1  # type: ignore[arg-type]
+
+    def test_aligned_mode_empty_timeline_not_included(self) -> None:
+        frames = [{"sequence": 1, "timestamp": 1000}]
+        manifest = build_manifest(
+            task_name="test",
+            frames=frames,
+            interval_seconds=1.0,
+            capture_aria=False,
+            capture_mode="aligned",
+            aligned_timeline=None,
+        )
+        assert manifest["capture_mode"] == "aligned"
+        assert "aligned_timeline" not in manifest
+
+
+# ---------------------------------------------------------------------------
+# Aligned capture session
+# ---------------------------------------------------------------------------
+
+
+class TestAlignedCaptureSession:
+    def test_aligned_mode_produces_timeline(self, tmp_path: Path) -> None:
+        """Aligned mode writes capture_mode and aligned_timeline to manifest."""
+        sleep_count = 0
+
+        def fake_sleep(seconds: float) -> None:
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 3:
+                signal.raise_signal(signal.SIGINT)
+
+        with (
+            patch(
+                "harness.capture._take_screenshot",
+                side_effect=lambda p: p.write_bytes(b"\x89PNG") or True,
+            ),
+            patch("time.sleep", side_effect=fake_sleep),
+            patch("harness.capture._get_app_context", return_value={"app": "TextEdit"}),
+        ):
+            capture_session(
+                output_dir=tmp_path,
+                interval_seconds=0.1,
+                capture_events=False,
+                task_name="aligned-test",
+                aligned=True,
+            )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        assert manifest["capture_mode"] == "aligned"
+        assert "aligned_timeline" in manifest
+        timeline = manifest["aligned_timeline"]
+        assert len(timeline) >= 1
+        # All entries should have required fields
+        for entry in timeline:
+            assert "t" in entry
+            assert "epoch" in entry
+            assert "trigger" in entry
+            assert "screenshot" in entry
+
+    def test_interval_mode_no_timeline(self, tmp_path: Path) -> None:
+        """Default interval mode should not produce aligned_timeline."""
+        call_count = 0
+
+        def fake_screencapture(args: list[str], **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            Path(args[2]).write_bytes(b"\x89PNG fake")
+            result = MagicMock()
+            result.returncode = 0
+            return result
+
+        def fake_sleep(seconds: float) -> None:
+            if call_count >= 2:
+                signal.raise_signal(signal.SIGINT)
+
+        with (
+            patch("subprocess.run", side_effect=fake_screencapture),
+            patch("time.sleep", side_effect=fake_sleep),
+        ):
+            capture_session(
+                output_dir=tmp_path,
+                interval_seconds=0.1,
+                task_name="interval-test",
+                aligned=False,
+            )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        assert manifest["capture_mode"] == "interval"
+        assert "aligned_timeline" not in manifest
+
+    def test_aligned_timeline_entries_have_app_context(self, tmp_path: Path) -> None:
+        """Aligned entries include app_context when available."""
+        call_count = 0
+
+        def fake_sleep(seconds: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 20:
+                signal.raise_signal(signal.SIGINT)
+
+        with (
+            patch(
+                "harness.capture._take_screenshot",
+                side_effect=lambda p: p.write_bytes(b"\x89PNG") or True,
+            ),
+            patch("time.sleep", side_effect=fake_sleep),
+            patch(
+                "harness.capture._get_app_context",
+                return_value={"app": "Safari", "window": "Google"},
+            ),
+        ):
+            capture_session(
+                output_dir=tmp_path,
+                interval_seconds=0.1,
+                capture_events=False,
+                task_name="ctx-test",
+                aligned=True,
+            )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        timeline = manifest.get("aligned_timeline", [])
+        assert len(timeline) >= 1
+        assert timeline[0].get("app_context", {}).get("app") == "Safari"
+
+    def test_aligned_focus_change_detected(self, tmp_path: Path) -> None:
+        """Focus changes between periodic captures produce focus_change entries."""
+        call_count = 0
+        app_sequence = iter([{"app": "TextEdit"}, {"app": "Safari"}, {"app": "Safari"}])
+
+        def fake_sleep(seconds: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 30:
+                signal.raise_signal(signal.SIGINT)
+
+        def fake_app_ctx() -> dict[str, str] | None:
+            return next(app_sequence, {"app": "Safari"})
+
+        with (
+            patch(
+                "harness.capture._take_screenshot",
+                side_effect=lambda p: p.write_bytes(b"\x89PNG") or True,
+            ),
+            patch("time.sleep", side_effect=fake_sleep),
+            patch("harness.capture._get_app_context", side_effect=fake_app_ctx),
+        ):
+            capture_session(
+                output_dir=tmp_path,
+                interval_seconds=0.1,
+                capture_events=False,
+                task_name="focus-test",
+                aligned=True,
+            )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        timeline = manifest.get("aligned_timeline", [])
+        triggers = [e["trigger"] for e in timeline]
+        assert "focus_change" in triggers
+        focus_entry = next(e for e in timeline if e["trigger"] == "focus_change")
+        assert focus_entry["event"]["from_app"] == "TextEdit"
+        assert focus_entry["event"]["to_app"] == "Safari"

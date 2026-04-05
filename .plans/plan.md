@@ -323,7 +323,14 @@ Exit criteria:
 - a documented config in `run_configs/` can be run without manual command translation
 - reports support adapter/harness comparisons without misleading metrics
 
-#### Milestone 6: Capture improvements behind evidence gates
+#### ~~Milestone 6: Capture improvements behind evidence gates~~ ✓ COMPLETE (2026-04-05)
+
+- [x] Step 1 — Add aligned timeline types, EventTap trigger queue, app context helper → verify: `uv run pytest tests/test_capture.py -q`
+- [x] Step 2 — Implement aligned capture mode in capture_session with poll-based loop, focus tracking, timeline building → verify: `uv run pytest tests/test_capture.py -q`
+- [x] Step 3 — Add --aligned CLI flag; update intent_extract.py to load and prefer aligned timeline → verify: `uv run pytest tests/test_intent_extract.py -q`
+- [x] Step 4 — Add focused tests for aligned capture, timeline structure, and authoring consumption → verify: `uv run pytest tests/test_capture.py tests/test_intent_extract.py -q`
+- [x] Step 5 — Full gate: ruff + mypy + pytest; update docs → verify: 543 passed, mypy clean, ruff clean (on changed files)
+Commit: "event-aligned capture mode with timeline evidence"
 
 Scope:
 
