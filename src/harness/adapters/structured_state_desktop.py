@@ -21,16 +21,16 @@ logger = logging.getLogger(__name__)
 
 # Default models for structured-state planning.
 # Using OpenAI to avoid a new dependency; the adapter is model-agnostic.
-_DEFAULT_MODEL = "gpt-4.1"
-_DEFAULT_CHEAP_MODEL = "gpt-4.1-mini"
+_DEFAULT_MODEL = "gpt-5.4-mini"
+_DEFAULT_CHEAP_MODEL = "gpt-5.4-nano"
 
 # Pricing per 1M tokens (April 2026)
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-5.4-nano": (0.20, 1.25),
 }
-_DEFAULT_INPUT_PRICE = 2.00
-_DEFAULT_OUTPUT_PRICE = 8.00
+_DEFAULT_INPUT_PRICE = 0.75
+_DEFAULT_OUTPUT_PRICE = 4.50
 
 # Routing thresholds
 _SPARSE_TREE_THRESHOLD = 3  # escalate if fewer interactive elements than this

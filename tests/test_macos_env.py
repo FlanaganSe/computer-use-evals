@@ -11,6 +11,7 @@ import pytest
 
 from harness.environments.macos import (
     MacOSDesktopEnvironment,
+    _normalize_keys,
     _serialize_ax_element,
 )
 from harness.types import Action, ActionType, Observation, ObservationType, Task
@@ -206,6 +207,22 @@ class TestActionExecution:
         assert result == "ok"
         mock_hotkey.assert_called_once_with("command", "s")
 
+    @patch("pyautogui.hotkey")
+    def test_press_unicode_symbols(self, mock_hotkey: MagicMock) -> None:
+        env = MacOSDesktopEnvironment()
+        action = Action(action_type=ActionType.PRESS, params={"key": "\u2318S"})
+        result = self._run_action(env, action)
+        assert result == "ok"
+        mock_hotkey.assert_called_once_with("command", "s")
+
+    @patch("pyautogui.hotkey")
+    def test_press_ascii_aliases(self, mock_hotkey: MagicMock) -> None:
+        env = MacOSDesktopEnvironment()
+        action = Action(action_type=ActionType.PRESS, params={"key": "CMD+SHIFT+S"})
+        result = self._run_action(env, action)
+        assert result == "ok"
+        mock_hotkey.assert_called_once_with("command", "shift", "s")
+
     def test_shell_action_success(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(
@@ -309,6 +326,60 @@ class TestActionExecution:
         action = Action(action_type=ActionType.FAIL, params={"reason": "test"})
         result = self._run_action(env, action)
         assert result == "fail:test"
+
+
+# ---------------------------------------------------------------------------
+# Key normalization
+# ---------------------------------------------------------------------------
+
+
+class TestKeyNormalization:
+    def test_pyautogui_format_passthrough(self) -> None:
+        assert _normalize_keys("command+s") == ["command", "s"]
+
+    def test_unicode_cmd_s(self) -> None:
+        assert _normalize_keys("\u2318S") == ["command", "s"]
+
+    def test_unicode_cmd_shift_s(self) -> None:
+        assert _normalize_keys("\u2318\u21e7S") == ["command", "shift", "s"]
+
+    def test_ascii_cmd_s(self) -> None:
+        assert _normalize_keys("CMD+S") == ["command", "s"]
+
+    def test_ascii_cmd_shift_s(self) -> None:
+        assert _normalize_keys("CMD+SHIFT+S") == ["command", "shift", "s"]
+
+    def test_mixed_unicode_plus_separator(self) -> None:
+        assert _normalize_keys("\u2318+S") == ["command", "s"]
+
+    def test_ctrl_alias(self) -> None:
+        assert _normalize_keys("CTRL+C") == ["control", "c"]
+
+    def test_alt_alias(self) -> None:
+        assert _normalize_keys("ALT+TAB") == ["option", "tab"]
+
+    def test_single_key(self) -> None:
+        assert _normalize_keys("escape") == ["escape"]
+
+    def test_unicode_backspace(self) -> None:
+        assert _normalize_keys("\u232b") == ["backspace"]
+
+    def test_unicode_return(self) -> None:
+        assert _normalize_keys("\u21a9") == ["return"]
+
+    def test_option_symbol(self) -> None:
+        assert _normalize_keys("\u2325N") == ["option", "n"]
+
+    def test_enter_alias(self) -> None:
+        assert _normalize_keys("ENTER") == ["return"]
+
+    def test_multiple_modifiers(self) -> None:
+        assert _normalize_keys("\u2303\u2325\u2318\u232b") == [
+            "control",
+            "option",
+            "command",
+            "backspace",
+        ]
 
 
 # ---------------------------------------------------------------------------

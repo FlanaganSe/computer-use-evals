@@ -33,6 +33,71 @@ _APP_SWITCH_POLL = 0.25
 # Commands allowed for SHELL actions (safety allowlist)
 _SHELL_ALLOWLIST = {"osascript", "open"}
 
+# Unicode symbol → pyautogui key name mapping.
+# Order matters: longer symbols must come first to avoid partial matches.
+_UNICODE_KEY_MAP: list[tuple[str, str]] = [
+    ("⌘", "command"),
+    ("⇧", "shift"),
+    ("⌥", "option"),
+    ("⌃", "control"),
+    ("⎋", "escape"),
+    ("⇥", "tab"),
+    ("⌫", "backspace"),
+    ("⌦", "delete"),
+    ("↩", "return"),
+    ("↑", "up"),
+    ("↓", "down"),
+    ("←", "left"),
+    ("→", "right"),
+    (" ", "space"),
+]
+
+# Case-insensitive ASCII aliases → pyautogui key name
+_KEY_ALIASES: dict[str, str] = {
+    "cmd": "command",
+    "ctrl": "control",
+    "alt": "option",
+    "opt": "option",
+    "meta": "command",
+    "win": "command",
+    "enter": "return",
+    "esc": "escape",
+    "del": "delete",
+    "bs": "backspace",
+}
+
+
+def _normalize_keys(raw: str) -> list[str]:
+    """Normalize a key combo string into pyautogui-compatible key names.
+
+    Handles all common formats:
+      - Unicode:  ⌘S, ⌘⇧S, ⌫
+      - ASCII:    CMD+S, CMD+SHIFT+S, command+s
+      - Mixed:    ⌘+S
+    """
+    # Step 1: expand Unicode modifier/key symbols to "name+" so they
+    # participate in the subsequent split.
+    s = raw
+    for symbol, name in _UNICODE_KEY_MAP:
+        s = s.replace(symbol, name + "+")
+
+    # Step 2: split on "+" and drop empty segments (from trailing "+")
+    parts = [p.strip() for p in s.split("+") if p.strip()]
+
+    # Step 3: normalize each part — resolve aliases, lowercase modifiers
+    normalized: list[str] = []
+    for part in parts:
+        lower = part.lower()
+        if lower in _KEY_ALIASES:
+            normalized.append(_KEY_ALIASES[lower])
+        elif lower in ("command", "shift", "option", "control", "fn"):
+            normalized.append(lower)
+        else:
+            # Regular key — pyautogui expects lowercase single chars
+            normalized.append(lower if len(part) == 1 else part.lower())
+
+    return normalized if normalized else [raw]
+
 
 class MacOSDesktopEnvironment:
     """Manages macOS desktop automation for task execution."""
@@ -207,7 +272,7 @@ class MacOSDesktopEnvironment:
                 key = params.get("key")
                 if key is None:
                     return "error:press requires 'key' param"
-                keys = [k.strip() for k in key.split("+")]
+                keys = _normalize_keys(key)
                 pyautogui.hotkey(*keys)
                 await asyncio.sleep(_ACTION_SETTLE_DELAY)
                 return "ok"

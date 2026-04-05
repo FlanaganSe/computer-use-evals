@@ -77,7 +77,8 @@ verification:
   primary:
     method: "programmatic"
     check: "<file_exists('path') or file_contains('path', 'text') \
-or form_submitted('name', 'email')>"
+or form_submitted('name', 'email') or app_focused('AppName') \
+or script_check('path/to/verify.py')>"
 
 cleanup_script: null
 
@@ -89,7 +90,11 @@ are involved (including cross-app workflows)
 - Preconditions: the starting state, not the steps
 - Verification: check the final outcome. Use file_contains if the user \
 saved a file with specific content. Use file_exists if they created a file. \
-Use form_submitted only if they actually submitted a form.
+Use form_submitted only if they actually submitted a form. \
+Use app_focused('AppName') if success means a specific app is focused. \
+Use script_check('tasks/<task>/verify.py') for custom verification \
+(e.g. checking calendar events, reminders, or other app state via AppleScript). \
+ONLY use these exact function names — do not invent new ones.
 - If the user copied text and pasted it into a file, verification should \
 check that the file contains the pasted text
 

@@ -20,6 +20,7 @@ _SUPPORTED_CHECKS = frozenset(
         "file_contains",
         "form_submitted",
         "app_focused",
+        "script_check",
     }
 )
 

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 FORM_SUBMISSION_PATH = Path("/tmp/harness_form_submission.json")
 
 # Model for llm_judge grading
-_LLM_JUDGE_MODEL = "gpt-4.1-mini"
+_LLM_JUDGE_MODEL = "gpt-5.4-nano"
 
 
 def _parse_quoted_args(s: str) -> list[str]:
@@ -73,6 +73,9 @@ def _eval_check(check: VerificationCheck, run_dir: Path) -> GraderResult:
 
     if expr.startswith("app_focused("):
         return _check_app_focused(expr)
+
+    if expr.startswith("script_check("):
+        return _check_script(expr)
 
     return GraderResult(
         passed=False,
@@ -245,6 +248,53 @@ def _check_app_focused(expr: str) -> GraderResult:
             passed=False,
             method="app_focused",
             explanation="Quartz not available — cannot check focused app",
+        )
+
+
+def _check_script(expr: str) -> GraderResult:
+    """Run a verification script and check its exit code.
+
+    Expects: script_check('path/to/script.py')
+    Exit 0 = passed, non-zero = failed.
+    Stdout is captured as the explanation.
+    """
+    import subprocess
+
+    inner = expr.removeprefix("script_check(").removesuffix(")")
+    script_path = inner.strip("'\"")
+
+    target = Path(script_path)
+    if not target.exists():
+        return GraderResult(
+            passed=False,
+            method="script_check",
+            explanation=f"Verification script not found: {target}",
+        )
+
+    try:
+        result = subprocess.run(
+            ["python3", str(target)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        explanation = result.stdout.strip() or result.stderr.strip() or "No output"
+        return GraderResult(
+            passed=result.returncode == 0,
+            method="script_check",
+            explanation=explanation,
+        )
+    except subprocess.TimeoutExpired:
+        return GraderResult(
+            passed=False,
+            method="script_check",
+            explanation=f"Verification script timed out: {target}",
+        )
+    except Exception as exc:
+        return GraderResult(
+            passed=False,
+            method="script_check",
+            explanation=f"Verification script error: {exc}",
         )
 
 
