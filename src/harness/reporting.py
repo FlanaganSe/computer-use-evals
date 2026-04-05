@@ -52,6 +52,36 @@ def generate_report(
         lines.append(f"{step.step}. {action_desc} -> {status}")
     lines.append("")
 
+    # Evidence summary (if decision-point evidence was persisted)
+    evidence_path = run_dir / "evidence.json"
+    if evidence_path.exists():
+        lines.append("## Decision Evidence")
+        lines.append("")
+        try:
+            import json
+
+            evidence = json.loads(evidence_path.read_text())
+            lines.append(f"- **Steps with evidence:** {len(evidence)}")
+            for i, ev in enumerate(evidence[:5]):  # Show first 5
+                app = ev.get("focused_app", "?")
+                action = ev.get("parsed_action", {})
+                action_name = action.get("action", "?") if isinstance(action, dict) else "?"
+                target = action.get("target", "") if isinstance(action, dict) else ""
+                lines.append(f"  {i + 1}. [{app}] {action_name} → {target}")
+            if len(evidence) > 5:
+                lines.append(f"  ... and {len(evidence) - 5} more (see evidence.json)")
+        except Exception:
+            lines.append("- Evidence file exists but could not be parsed")
+        lines.append("")
+
+    # Milestone progress (if task has milestones)
+    if task.milestones:
+        lines.append("## Milestones")
+        lines.append("")
+        for m in task.milestones:
+            lines.append(f"- **{m.id}**: {m.description}")
+        lines.append("")
+
     lines.append("## Artifacts")
     lines.append("")
     lines.append(f"- Run directory: `{run_dir}`")
@@ -59,6 +89,8 @@ def generate_report(
     if artifacts_dir.exists():
         for f in sorted(artifacts_dir.iterdir()):
             lines.append(f"- `artifacts/{f.name}` ({f.stat().st_size} bytes)")
+    if evidence_path.exists():
+        lines.append(f"- `evidence.json` ({evidence_path.stat().st_size} bytes)")
     lines.append("")
 
     return "\n".join(lines)

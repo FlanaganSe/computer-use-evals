@@ -1,449 +1,513 @@
-# Implementation Plan
+# Implementation Plan: Structured-State-First Harness Rewrite
 
 ## Contract
 
 ### 1. Problem
 
-We need a macOS-first proof-of-concept eval system for desktop and browser agent workflows. The system should help us understand whether recorded user activity and normalized task artifacts can be turned into reliable agent-executable tasks, and which factors most affect performance: observation format, grounding strategy, model choice, tool access, execution method, and harness design.
+The harness spine is mostly correct, but it is currently evaluating the wrong execution architecture for the product direction this repo is meant to prove.
 
-The immediate goal is not to build the end-user product. The immediate goal is to build enough harness infrastructure to run repeatable experiments, inspect failures, and compare conditions quickly so we can reduce unknown-unknowns in this problem space.
+Today:
+
+- `src/harness/runner.py` already provides a clean setup -> observe -> decide -> execute -> grade loop.
+- `src/harness/types.py` already separates Adapter and Environment protocols cleanly.
+- `src/harness/environments/macos.py` already captures macOS accessibility state, but no adapter uses it to plan actions.
+- `src/harness/graders.py` only implements a small programmatic checker set, while `llm_judge` is declared in the schema and unimplemented.
+- `tasks/my-test-task/task.yaml` already expresses unsupported grader logic, so current eval trust is partly broken.
+- `src/harness/reporting.py` and `trace.json` preserve actions/results, but not the decision-useful structured evidence needed for debugging the new path.
+
+The rewrite needs to realign the harness around structured accessibility state -> regular LLM -> semantic action -> environment resolution, while keeping the harness lean and useful as a proof system rather than rebuilding a product stack inside it.
 
 ### 2. Requirements
 
-1. Define a minimal canonical task artifact for the PoC that represents user intent and task setup without overcommitting to a full workflow language.
-2. Support a small, real task suite for macOS-first desktop and browser flows, focused on repeatable tasks with objective outcome checks.
-3. Model the harness around explicit core objects: `task`, `trial`, `trace`, `grader`, and `report`.
-4. Allow independent comparison of at least these dimensions:
-   - observation mode,
-   - grounding strategy,
-   - model/runtime choice,
-   - execution method/tooling.
-5. Capture enough trace data to explain failures, not just score them.
-6. Prioritize fast local iteration, simple setup, and reversible design choices over completeness.
-7. Keep task grading outcome-focused where possible, with programmatic checks preferred over path checking or judge-based scoring.
-8. Make unknowns visible through metrics and failure taxonomy rather than hiding them behind opaque abstractions.
-9. Preserve room to evaluate Codex OAuth / local CLI usage, but do not make the PoC dependent on one provider or runtime before that is validated.
+- Preserve the existing harness spine unless a concrete code seam blocks the new direction.
+- Stay macOS-first for the rewrite.
+- Make the first implementation additive where possible.
+- Build the smallest first slice that can validate the structured-state hypothesis on a real desktop task.
+- Repair evaluator trust before relying on new experiment results.
+- Add milestone-based verification as the minimum task-format upgrade.
+- Persist evidence in a form that helps explain failures without replaying runs interactively.
+- Keep the experiment matrix controlled so only one major variable changes at a time: state shape, prompt shape, model/routing, or fallback mode.
+- Keep `deterministic` and `openai_cu` available long enough to compare against the new path.
+- Separate “replace now” from “deprecate later”.
+- Avoid speculative platform work: no full product abstractions, no broad cross-platform layer, no learned router, no major recorder rebuild in the first phase.
 
 ### 3. Acceptance Criteria
 
-1. There is a documented plan for a first implementation that can run a small starter task suite on macOS with isolated trials and reproducible scoring.
-2. The plan defines the first artifact schema, harness boundaries, and the minimal storage layout for tasks, traces, evidence, and reports.
-3. The plan includes at least one milestone dedicated to proving the harness loop end-to-end before adding capture/recording sophistication.
-4. The plan makes comparison conditions explicit so we can answer questions such as:
-   - whether screenshots alone are sufficient,
-   - whether accessibility data materially helps,
-   - whether tool-assisted execution outperforms raw GUI control,
-   - whether harness/context changes matter more than model swaps.
-5. The plan includes success metrics, failure categories, and verification strategy for the first task families.
-6. The plan identifies manual setup and decision gates that require operator input rather than assuming they can be automated away.
-7. The plan stays intentionally small enough to ship as a PoC without creating a custom framework we would need to unwind later.
+- A new macOS structured-state desktop adapter exists and runs through the existing runner without protocol breakage.
+- The new path can target desktop elements semantically using stable AX references with coordinate fallback.
+- At least one trusted desktop task uses milestones and yields decision-useful evidence artifacts.
+- Unsupported grader/task expressions fail fast instead of silently producing misleading eval results.
+- `llm_judge` works as a small, explicit verification path for tasks that cannot be checked programmatically.
+- Reporting and trace artifacts make milestone progress and new failure modes inspectable.
+- Legacy baselines still run during the comparison phase.
+- There is a clear gate for when to keep, demote, or later remove screenshot-first desktop paths.
 
 ### 4. Non-goals
 
-1. Building the full user-facing recording product.
-2. Solving cross-platform support beyond keeping future expansion possible.
-3. Designing a universal benchmark platform or generalized workflow DSL.
-4. Optimizing for enterprise scale, hosted orchestration, or multi-tenant infrastructure.
-5. Achieving production-grade safety, auth, or permissions handling beyond what is necessary for controlled PoC experiments.
-6. Assuming that screen recordings themselves are the canonical replay format; for the PoC they are evidence for authoring normalized tasks.
+- Building a full desktop agent product architecture inside the harness.
+- Building a skill compiler, branch synthesis engine, generalized workflow DSL, or replay compiler.
+- Cross-platform accessibility abstractions in this rewrite.
+- Learned model routing or classifier-based escalation in the first implementation.
+- A full continuous-video recorder overhaul before the AX-first execution path is validated.
+- Removing legacy adapters before the new path has comparison evidence behind it.
 
 ### 5. Constraints
 
-1. Current repository state is minimal: only research and ideation documents exist, with no implementation scaffold yet.
-2. The plan must be grounded in `docs/research-consolidated.md` and the repo’s current state, not in a speculative architecture detached from what we can realistically build next.
-3. The PoC should remain simple, inspectable, and easy to change; custom abstractions must earn their keep.
-4. macOS is the initial platform, and accessibility coverage on macOS is known to be incomplete, so the design cannot depend on AX alone.
-5. Eval speed matters; the system must support quick iteration and not require heavyweight infrastructure for every experiment.
-6. We should prefer local/open tooling where practical, but tool choices must stay swappable until we validate their fit.
-7. Some decisions are inherently manual at this stage, including task curation, environment setup policy, and acceptable initial runtime/tooling tradeoffs.
+- Primary planning source is `.plans/research-findings.md`; secondary sources are `.plans/research.md` and `.claude/plans/research-findings.md`.
+- `docs/architecture.md` and `.agents/rules/*` are referenced by repo guidance but do not exist locally; the actual source and tests therefore carry more weight than missing docs.
+- Existing repo state is already dirty; this plan assumes additive changes and careful migration rather than cleanup-by-reversion.
+- The current task schema and grader implementation are partially out of sync; the plan must treat evaluator trust as a first-order issue.
+- The rewrite should minimize complexity and keep milestones independently shippable and testable.
 
 ## Implementation Plan
 
 ### 1. Summary
 
-This PoC should be built as a thin local harness, not as a large framework integration and not as a recording product. The harness should answer one question well: given a normalized task package, can different agent setups complete desktop and browser workflows reliably, and can we explain why they fail when they do not?
+Recommended first implementation milestone:
 
-The highest-leverage decision is to make the harness boundary explicit and stable early:
+- Build a single trustworthy AX-first desktop slice: structured AX snapshot with stable node refs, a new semantic desktop adapter, minimal macOS target resolution, decision-evidence persistence, and enough verifier/task fixes to trust the result.
 
-1. **Canonical artifact**: a normalized task package stored as YAML plus assets, not a raw recording.
-2. **Execution core**: a small custom local runner with narrow interfaces for observation, model adapter, executor, grader, and reporting.
-3. **Environment policy**: start on host macOS with deterministic setup/cleanup scripts for speed; add VM isolation only after the host loop exposes what actually needs isolation.
-4. **Provider policy**: keep model/runtime access behind adapters so we can compare OpenAI Responses computer-use, Codex CLI-driven runs, and deterministic/non-LLM baselines without rewriting the harness.
-5. **Capture policy**: defer full user recording ingestion until the eval loop exists; in the PoC, recordings are evidence for task authoring, not the primary runtime format.
+Why this first:
 
-These decisions minimize risk because they keep the first implementation close to the real unknowns:
+- It is the smallest rewrite that changes what the harness can prove.
+- It tests the core product-direction hypothesis directly on macOS.
+- It avoids premature work on routing, fallback vision, and recorder overhaul.
+- It fixes the minimum trust gaps that would otherwise contaminate comparison data.
 
-1. task specification quality,
-2. observation quality,
-3. execution reliability,
-4. grading reliability,
-5. failure explainability.
+Preserve these architectural decisions:
+
+- Keep the Adapter and Environment protocols in `src/harness/types.py`.
+- Keep the runner loop shape in `src/harness/runner.py`.
+- Keep `src/harness/adapters/deterministic.py` as the permanent sanity baseline.
+- Keep `src/harness/adapters/openai_cu.py` as a comparison lane until the new path is validated.
+- Keep the existing human-readable AX text serializer for logs; add a parallel machine-readable state representation instead of replacing it immediately.
 
 ### 2. Current State
 
-As of April 4, 2026, the repository contains only ideation and research documents:
+What can stay as-is:
 
-1. `docs/research-consolidated.md`
-2. `docs/init-idea.md`
+- `src/harness/types.py` Adapter and Environment protocols.
+- `src/harness/runner.py` overall orchestration model.
+- `src/harness/environments/browser.py` and browser tasks as existing non-desktop baselines.
+- `src/harness/adapters/deterministic.py`.
+- The failure taxonomy enum in `src/harness/failures.py`.
+- Most comparison-report scaffolding in `src/harness/reporting.py`.
+- Variable substitution mechanics in `src/harness/task_loader.py`, with targeted extension rather than rewrite.
 
-There is currently no implementation scaffold, no package manager, no runtime code, no tests, no CLI, and no task corpus. That means the first implementation plan needs to establish the project skeleton as well as the eval model.
+What should be modified in place:
 
-Grounded implications from the current state and research:
+- `src/harness/types.py` to add optional milestone and evidence-oriented models.
+- `src/harness/task_loader.py` to validate new task fields and reject unsupported grader/check forms.
+- `src/harness/runner.py` to record decision evidence, evaluate milestones, and classify more failures when supported by evidence.
+- `src/harness/graders.py` to implement `llm_judge` and a small milestone-aware verification surface.
+- `src/harness/reporting.py` to show milestone/evidence outcomes and treat AX-targeted actions as semantic actions.
+- `src/harness/environments/macos.py` to expose structured AX state and resolve semantic targets.
+- `src/harness/capture.py` and `src/harness/intent_extract.py` to add AX snapshots before any broader recorder redesign.
+- `tasks/desktop_textedit_save/task.yaml` and `tasks/my-test-task/task.yaml` so the task suite is trustworthy enough for comparison.
 
-1. We should not commit to a framework-heavy architecture before we have even one end-to-end passing task.
-2. The first harness must be inspectable from the filesystem and CLI, since understanding "what happened and why" is part of the product value.
-3. The plan should produce useful results before the recording subsystem exists.
-4. The plan should let us compare harness choices, not just model choices.
+What should be added in parallel first:
 
-### 3. Files To Change
+- A new desktop structured-state adapter rather than repurposing `codex_subscription` immediately.
+- A parallel AX state module or serializer for stable IDs, pruning, and machine-readable output.
+- A small milestone verifier module or helper layer, if keeping this logic out of `graders.py` keeps complexity down.
+- New tests dedicated to the new path rather than rewriting legacy adapter tests up front.
 
-Existing files that should likely be updated during implementation:
+What should be demoted or removed later:
 
-1. `docs/research-consolidated.md`
-   - only if implementation uncovers factual mismatches or if we add a short "validated assumptions" appendix.
-2. `docs/init-idea.md`
-   - only if we want to trim outdated wording once the first scaffold exists.
-3. `.plans/plan.md`
-   - this file, as milestones complete or decisions materially change.
+- The screenshot-first desktop path should be demoted after comparison evidence exists, not before.
+- Browser-specific semantics inside `codex_subscription` should only be generalized after the desktop path proves out.
+- Any legacy report sections that assume `openai_cu` is a primary path should be reworded only after the new path becomes the default comparison target.
 
-No existing source files currently constrain implementation because no source tree exists yet.
+### 3. Files to Change
 
-### 4. Files To Create
+- `src/harness/types.py`
+  - Add optional `Milestone`, `MilestoneResult`, and step-evidence fields with backward compatibility.
+  - Extend verification typing only as far as needed for milestone checks.
+- `src/harness/task_loader.py`
+  - Support substitution/validation for optional milestone structures.
+  - Add a lint/validation layer for unsupported check expressions.
+- `src/harness/runner.py`
+  - Persist decision-point evidence.
+  - Add milestone evaluation hooks.
+  - Assign more failure categories where evidence supports them.
+  - Register the new adapter without disrupting existing registries.
+- `src/harness/graders.py`
+  - Implement `llm_judge`.
+  - Centralize supported check parsing so invalid task DSL fails fast.
+  - Add minimal milestone helpers.
+- `src/harness/reporting.py`
+  - Surface milestone outcomes, evidence locations, and semantic-target usage.
+  - Preserve current comparison views while adding the new signals.
+- `src/harness/environments/macos.py`
+  - Add structured AX export with stable references and bounds.
+  - Resolve semantic targets to executable desktop actions.
+  - Keep coordinate execution as fallback.
+- `src/harness/capture.py`
+  - Persist AX snapshots alongside screenshots.
+- `src/harness/intent_extract.py`
+  - Consume more than first/last AX context once AX snapshots exist.
+- `src/harness/adapters/openai_cu.py`
+  - Only small cleanup later if needed for legacy labeling or comparison metadata.
+- `tasks/desktop_textedit_save/task.yaml`
+  - Upgrade to optional milestones without breaking deterministic compatibility.
+- `tasks/my-test-task/task.yaml`
+  - Convert to supported verification or mark it non-comparable until it is valid.
+- `tests/test_task_loader.py`
+  - Add milestone/task validation coverage.
+- `tests/test_graders.py`
+  - Add `llm_judge` and unsupported-check validation coverage.
+- `tests/test_macos_env.py`
+  - Add structured AX export and semantic target resolution tests.
+- `tests/test_capture.py`
+  - Cover AX snapshot persistence.
+- `tests/test_intent_extract.py`
+  - Cover multi-snapshot AX prompt construction.
+- `tests/test_detailed_report.py`
+  - Cover milestone/evidence reporting additions.
 
-Recommended initial project shape:
+### 4. Files to Create
 
-1. `README.md`
-2. `pyproject.toml`
-3. `.gitignore`
-4. `src/harness_evals/__init__.py`
-5. `src/harness_evals/cli.py`
-6. `src/harness_evals/config.py`
-7. `src/harness_evals/models/task.py`
-8. `src/harness_evals/models/trial.py`
-9. `src/harness_evals/models/trace.py`
-10. `src/harness_evals/models/report.py`
-11. `src/harness_evals/task_loader.py`
-12. `src/harness_evals/runner.py`
-13. `src/harness_evals/reporting.py`
-14. `src/harness_evals/failures.py`
-15. `src/harness_evals/adapters/model/base.py`
-16. `src/harness_evals/adapters/model/deterministic.py`
-17. `src/harness_evals/adapters/model/openai_responses.py`
-18. `src/harness_evals/adapters/model/codex_cli.py`
-19. `src/harness_evals/adapters/observation/base.py`
-20. `src/harness_evals/adapters/observation/screenshot.py`
-21. `src/harness_evals/adapters/observation/macos_ax.py`
-22. `src/harness_evals/adapters/observation/filesystem.py`
-23. `src/harness_evals/adapters/executor/base.py`
-24. `src/harness_evals/adapters/executor/browser.py`
-25. `src/harness_evals/adapters/executor/macos_ui.py`
-26. `src/harness_evals/adapters/environment/base.py`
-27. `src/harness_evals/adapters/environment/host_macos.py`
-28. `src/harness_evals/graders/base.py`
-29. `src/harness_evals/graders/programmatic.py`
-30. `src/harness_evals/graders/judge.py`
-31. `tests/test_task_loader.py`
-32. `tests/test_runner_smoke.py`
-33. `tests/test_graders.py`
-34. `tests/test_reports.py`
-35. `tasks/browser/download_rename/task.yaml`
-36. `tasks/browser/form_fill/task.yaml`
-37. `tasks/desktop/file_export/task.yaml`
-38. `tasks/_shared/`
-39. `scripts/setup/`
-40. `scripts/cleanup/`
-41. `scripts/manual/`
-42. `runs/.gitkeep`
-43. `docs/architecture.md`
-44. `docs/decisions.md`
+- `src/harness/adapters/structured_state_desktop.py`
+  - New primary experiment adapter for AX-first desktop planning.
+- `src/harness/ax_state.py`
+  - Shared AX node model, pruning, stable ID generation, and serializer helpers.
+- `src/harness/milestones.py`
+  - Optional helper layer for milestone evaluation and result shaping, if this keeps `runner.py` and `graders.py` cleaner.
+- `tests/test_ax_state.py`
+  - Stable ID, pruning, and serialization tests.
+- `tests/test_structured_state_desktop.py`
+  - Prompt construction, semantic action parsing, and routing/fallback tests.
+- `tests/test_milestones.py`
+  - Runner- and verifier-facing milestone behavior tests.
 
-Notes on these choices:
-
-1. Python is the lowest-risk starting language here because the likely ecosystem touchpoints are Python-heavy: desktop automation libraries, Playwright support, grading libraries, and Inspect AI if we later integrate it.
-2. The directory names intentionally mirror the explicit research objects and comparison dimensions.
-3. `tasks/` and `runs/` are first-class project assets, not test fixtures hidden under `tests/`.
+If milestone logic stays small enough, `src/harness/milestones.py` and `tests/test_milestones.py` can collapse into `graders.py` and `tests/test_graders.py` to avoid needless file count growth.
 
 ### 5. Milestone Outline
 
-#### Milestone 1: Establish The Minimal Harness Loop
+#### Milestone 1: Trustworthy AX Desktop Slice
 
-Goal: prove that a normalized task package can be loaded, executed through a local runner, graded, and written to disk with a trace and report.
+- [x] Step 1 — AX state module: stable IDs, pruning, machine-readable serialization (`src/harness/ax_state.py` + `tests/test_ax_state.py`) → verify: `python -m pytest tests/test_ax_state.py -v`
+- [x] Step 2 — Structured-state desktop adapter + semantic target resolution in macOS env (`src/harness/adapters/structured_state_desktop.py`, extend `environments/macos.py`) → verify: `python -m pytest tests/test_structured_state_desktop.py tests/test_macos_env.py -v`
+- [x] Step 3 — Decision-evidence persistence in runner + llm_judge + task/check validation (`runner.py`, `graders.py`, `task_loader.py`, `types.py`) → verify: `python -m pytest tests/test_graders.py tests/test_task_loader.py -v`
+- [x] Step 4 — Anchor task upgrade + my-test-task exclusion + reporting evidence section → verify: `python -m pytest tests/ -v --ignore=tests/test_deterministic_smoke.py --ignore=tests/test_openai_adapter.py -k "not test_passes_with_matching_fields and not test_fails_with_wrong_name"`
+- [x] Step 5 — AX coverage probe script + bounded prompt/state-shaping pass (manual, documented) → verify: manual run of probe script
+Commit: "implement structured-state desktop milestone foundation"
 
-Scope:
+Objective:
 
-1. Bootstrap the Python project and CLI.
-2. Define versioned Pydantic models for `task`, `trial`, `trace`, and `report`.
-3. Define the first task package schema as YAML plus optional assets.
-4. Implement a deterministic runner path with no live model dependency.
-5. Implement run directories that persist:
-   - resolved task input,
-   - step trace,
-   - artifacts metadata,
-   - grader output,
-   - summary report.
-6. Add one trivial end-to-end task that can pass deterministically.
-
-Why first:
-
-1. This milestone proves the artifact model and filesystem layout before we add desktop complexity.
-2. It gives us a debugging surface for every later milestone.
-3. It avoids premature commitment to any external agent framework.
-
-Exit criteria:
-
-1. `run task` works locally on one deterministic sample task.
-2. A completed run produces a readable trace and report on disk.
-3. A failing run is visibly classifiable as setup, execution, or grader failure.
-
-#### Milestone 2: Author A Small, Outcome-Graded Starter Suite
-
-Goal: stand up a small real task suite with objective verification and deterministic environment setup.
+- Validate the structured-state desktop hypothesis with the smallest additive slice that still yields trustworthy evidence.
 
 Scope:
 
-1. Create 3 initial tasks:
-   - browser download plus rename,
-   - browser form fill,
-   - desktop file transform or export.
-2. Add task setup and cleanup scripts.
-3. Add programmatic graders for all 3 tasks.
-4. Add a failure taxonomy and attach failure labels to grader and runner outputs.
-5. Add pass/fail and per-step reporting across repeated trials.
+- **First sub-step (gates the rest):** Run an AX coverage probe on anchor apps (TextEdit, Finder, Chrome) — dump the tree, count interactive elements, check whether task-critical controls are present. If the anchor desktop app lacks usable AX coverage, stop and reassess before building the adapter. This is ~30 minutes of work that can save days.
+- Add a machine-readable AX state path with stable node references, bounds, and interactive-element pruning. Pruning rules and their iteration are first-class concerns here — which roles to include, how many elements to cap at, and how to prioritize near-focus elements will likely dominate adapter performance more than model choice. Start with the rules from `.plans/research-findings.md` §3.1 and expect to iterate during prompt tuning.
+- Add `StructuredStateDesktopAdapter` using the existing Adapter protocol.
+- Extend `MacOSDesktopEnvironment` to resolve semantic target IDs to coordinates and execute with coordinate fallback.
+- Persist decision-point evidence per step:
+  - focused app/window
+  - pruned AX state or reference
+  - chosen action
+  - execution result
+- Implement minimal `llm_judge`.
+- Add task/check validation so unsupported expressions fail fast.
+- Upgrade `desktop_textedit_save` to optional milestones while preserving final verification.
+- Either repair `tasks/my-test-task/task.yaml` into supported semantics or explicitly remove it from trusted comparison runs until repaired.
+- Run one bounded state-shaping experiment on the anchor desktop task with a single model:
+  - compare 2-3 pruning/prompt variants max
+  - do not add routing yet
+  - do not add a second provider yet
+  - do not add vision fallback yet
+  This keeps the first learning loop focused on whether context shape, not model fanout, is driving desktop performance.
 
-Why second:
+Why this is first:
 
-1. The harness is not useful until it can compare more than one task.
-2. Real tasks expose schema gaps faster than speculative schema design.
-3. Programmatic verification gives us a strong baseline before judge-based grading is introduced.
+- It directly answers whether AX-first desktop planning works on macOS.
+- It preserves the rest of the harness spine.
+- It prevents obviously invalid tasks/verifiers from poisoning the first comparison signal.
 
-Exit criteria:
+Dependencies:
 
-1. At least 3 tasks run from the CLI with setup, execution, and verification.
-2. Reports aggregate multiple trials per task.
-3. The task schema has survived contact with real workflows without becoming a mini-DSL.
+- None beyond current repo state.
 
-#### Milestone 3: Add Baselines And Swappable Agent Adapters
+Exit gate:
 
-Goal: compare harness and model choices without changing the harness core.
+- The new adapter can complete or credibly attempt `desktop_textedit_save` through the existing runner.
+- Stable AX node references can be used to select a target and resolve fallback coordinates.
+- A failed run is explainable from persisted evidence without replaying the task manually.
+- Unsupported check expressions now fail at load/validation time instead of producing misleading results.
+- `llm_judge` has unit coverage and one harness-path integration test.
+- One prompt/state baseline is chosen and frozen for subsequent comparisons, so later experiments do not conflate architecture changes with prompt churn.
 
-Scope:
+Acceptance experiments:
 
-1. Implement the first model/runtime adapter interface.
-2. Ship at least 3 runners:
-   - deterministic baseline,
-   - OpenAI Responses computer-use adapter,
-   - Codex CLI adapter.
-3. Add a comparison matrix CLI mode that runs the same task suite across conditions.
-4. Record model/tool metadata, token or cost metadata where available, and action summaries.
-5. Add run configuration files so experiments are reproducible.
+- AX coverage probe results (from first sub-step) confirm anchor apps are viable.
+- Prompt/state-shaping probe results identify one compact prompt/pruning format that is good enough to carry forward.
+- Accept Milestone 1 if the new adapter can complete or credibly attempt the anchor desktop task and the evidence artifacts are diagnostic enough to explain what happened.
 
-Critical decision made here:
+#### Milestone 2: Milestone-Aware Verification and Reporting
 
-1. **Do not make Inspect AI the day-1 runtime backbone.**
-2. Instead, keep a thin internal runner and make Inspect AI a later integration candidate if it helps with orchestration or dataset handling.
+Objective:
 
-Reasoning:
-
-1. OpenAI’s current computer-use guidance is still harness-oriented: the model inspects screenshots and returns structured actions for *your harness* to execute.
-2. The core unknown for this project is the harness boundary itself.
-3. If we start inside a framework, we risk confusing framework behavior with agent behavior and losing observability into the exact place where the PoC needs clarity.
-
-Exit criteria:
-
-1. The same task can run under at least 2 materially different adapters.
-2. Reports make cross-condition comparison easy.
-3. Failures can be separated into model errors versus harness or environment errors with reasonable confidence.
-
-#### Milestone 4: Add Observation Layers And Execution Telemetry
-
-Goal: move from "did it pass?" to "what inputs and execution choices changed the outcome?"
+- Make the harness outputs more trustworthy and more diagnostic without widening the execution architecture again.
 
 Scope:
 
-1. Add screenshot observation capture.
-2. Add macOS AX capture as optional structured context.
-3. Add window metadata, filesystem deltas, and clipboard/download observations where feasible.
-4. Implement semantic action ratio, AX availability rate, fallback rate, and step success reporting.
-5. Record raw model requests and action outputs when safe and practical.
-6. Add an initial hybrid observation mode:
-   - screenshot-only,
-   - AX-only where available,
-   - hybrid.
+- Add optional milestone schema to `Task`.
+- Evaluate milestone status during runs using a minimal checker surface:
+  - `programmatic`
+  - small AX-state predicate support where needed
+  - `llm_judge` only where programmatic checks are impractical
+- Record milestone results in trace/report artifacts.
+- Improve failure assignment only where milestone/evidence data makes the category defensible.
+- Update reporting to show where the run broke, not just whether it passed.
 
-Why this is a separate milestone:
+Dependencies:
 
-1. Research strongly suggests harness and observation design matter more than raw model choice.
-2. We should measure that directly instead of assuming it.
+- Milestone 1 decision evidence and task-validation foundation.
 
-Exit criteria:
+Exit gate:
 
-1. The harness can compare at least 2 observation modes on the same task suite.
-2. Reports can show whether structured context is helping or not.
-3. We can quantify when the system falls back to pixels or coordinates.
+- At least one task can show milestone progress in artifacts and reports.
+- Milestone data identifies failure location better than final-only grading on at least one failed run.
+- Runner changes remain backward compatible with v1 tasks.
 
-#### Milestone 5: Add Environment Controls And Regression Detection
+Acceptance experiments:
 
-Goal: reduce noise and make repeated comparisons trustworthy.
+- Re-run the upgraded desktop task and compare “final-outcome-only” diagnosis versus milestone-aware diagnosis.
+- Accept if milestone data reveals at least one actionable failure explanation that the current trace/report would not.
 
-Scope:
+#### Milestone 3: Capture and Authoring Alignment
 
-1. Standardize environment setup and cleanup contracts per task.
-2. Add trial repetition and seedable run configuration.
-3. Introduce golden comparison outputs for traces and report summaries.
-4. Add lightweight regression checks suitable for CI for deterministic paths.
-5. Evaluate whether host macOS is still sufficient or whether we need isolated VM execution for specific task families.
+Objective:
 
-Decision gate:
-
-1. If host execution noise is low enough for the starter suite, stay on host for the PoC and defer virtualization.
-2. If environment noise is blocking evaluation quality, add a VM-backed environment adapter next, potentially using Cua or another macOS VM layer.
-
-Reasoning:
-
-1. VM isolation is attractive, but it adds setup and debugging overhead.
-2. We should earn that complexity by proving host execution is the limiting factor.
-
-Exit criteria:
-
-1. We can repeat the same configuration enough times to trust trend comparisons.
-2. Regression checks catch obvious harness breakage before manual reruns.
-3. The virtualization decision is explicit and documented.
-
-#### Milestone 6: Add Evidence-Ingest Prototypes For Task Authoring
-
-Goal: connect the eventual recording vision back to the eval harness without turning the project into a product build.
+- Improve authoring inputs with AX snapshots before any recorder overhaul.
 
 Scope:
 
-1. Define an `evidence/` layout for screenshots, notes, transcript snippets, and optional structured metadata.
-2. Add a manual or semi-assisted flow that converts evidence into a normalized task package.
-3. Support optional narration and post-hoc intent editing at the artifact level.
-4. Evaluate whether a lightweight capture import is enough, or whether a dedicated recording tool integration is justified.
-5. Keep runtime execution fully task-package-based; evidence should not become the direct replay medium.
+- Save AX snapshots during capture sessions.
+- Update `intent_extract.py` to include sampled AX context from the capture rather than only first/last state.
+- Keep screenshot sampling and event grouping; add AX rather than replacing those inputs.
+- Do not move to video-first capture yet.
 
-Why this comes late:
+Dependencies:
 
-1. Without a working eval loop, evidence capture tells us little.
-2. Once the loop exists, we can evaluate which evidence actually improves task authoring or runtime performance.
+- Structured AX export from Milestone 1.
 
-Exit criteria:
+Exit gate:
 
-1. At least one task package can be authored from recorded evidence.
-2. The evidence format remains auxiliary and does not distort the core harness architecture.
-3. The cost and value of richer capture are visible enough to decide whether further productization is justified.
+- Capture output includes AX state artifacts consistently when enabled.
+- Intent extraction prompts include sampled AX context in a bounded, testable way.
+- Existing capture and authoring workflows still work when AX capture is disabled.
+
+Acceptance experiments:
+
+- Compare task drafting quality on a small set of recordings with and without AX context.
+- Accept if AX context yields noticeably better task descriptions or variable extraction on at least two recordings.
+
+#### Milestone 4: Comparison Runs and Cheap-First Routing
+
+Objective:
+
+- Decide whether the new path should become the harness’s primary desktop execution lane.
+
+Scope:
+
+- Add heuristic routing inside the new structured-state adapter:
+  - cheap tier for easy, well-grounded AX decisions
+  - stronger model for ambiguous steps or post-failure retries
+- Only add a second model or provider after the baseline prompt/state format is stable enough that remaining uncertainty is genuinely model-driven.
+- Add screenshot fallback only if Milestone 1-3 evidence shows AX coverage gaps on target apps.
+- Run side-by-side comparison suite across:
+  - `deterministic`
+  - `structured_state_desktop`
+  - `openai_cu`
+  - optional hybrid variant if AX coverage requires it
+- Expand desktop task coverage only after the first desktop slice is trusted.
+
+Dependencies:
+
+- Milestones 1-3 complete.
+
+Exit gate:
+
+- Structured-state desktop path matches or beats the screenshot-first desktop path on the trusted task set at materially lower cost or lower step count.
+- Cheap-first routing retains acceptable success relative to the always-strong model path.
+- If screenshot fallback is needed, its triggering conditions are simple and evidence-backed.
+
+Acceptance experiments:
+
+- Structured-state vs screenshot-first:
+  - accept if structured state is at least as successful on the trusted desktop set and materially cheaper or shorter-step on average
+- Cheap-first routing:
+  - accept if routed mode retains at least 90% of always-strong success on the trusted set at meaningfully lower cost
+
+#### Milestone 5: Default Promotion and Legacy Demotion
+
+Objective:
+
+- Promote the new architecture without losing comparison value too early.
+
+Scope:
+
+- Make the structured-state desktop adapter the documented primary desktop path.
+- Reword reporting/docs/config so `openai_cu` is clearly a comparison lane, not the main direction.
+- Remove or downgrade any repo defaults that still imply screenshot-first desktop execution.
+- Keep legacy baselines available behind explicit adapter selection until there is enough historical comparison data.
+- Do one explicit legacy-surface audit during promotion so stale assumptions do not linger in:
+  - adapter registry/defaults
+  - CLI help and run configs
+  - report labels and comparison sections
+  - README and planning docs
+  - tests that still encode screenshot-first-as-primary assumptions
+
+Dependencies:
+
+- Milestone 4 comparison evidence.
+
+Exit gate:
+
+- The new path is the default desktop experiment path.
+- Legacy screenshot-first desktop path remains intentionally available, but is no longer treated as the investment target.
+- No shared reporting or CLI behavior breaks legacy runs.
+- No stale defaults or docs still imply that screenshot-first desktop execution is the main path.
 
 ### 6. Testing Strategy
 
-Testing should follow the same philosophy as the harness: outcome-first, layered, and cheap by default.
+Per milestone, add tests before widening scope.
 
-1. **Schema tests**
-   - validate task, trial, trace, and report models,
-   - validate versioning and backwards-compatibility behavior for the first schema revision.
-2. **Pure unit tests**
-   - task loading,
-   - variable substitution,
-   - failure taxonomy mapping,
-   - report aggregation.
-3. **Deterministic smoke tests**
-   - run a no-model task end to end in CI,
-   - ensure run artifacts are written with stable structure.
-4. **Gated integration tests**
-   - browser executor tests,
-   - macOS-specific executor tests,
-   - live model adapter tests behind explicit env flags and never as mandatory default CI.
-5. **Golden-output tests**
-   - compare normalized trace/report outputs for deterministic runs,
-   - use these for regression detection when harness code changes.
-6. **Manual eval protocol**
-   - for live-agent conditions, use a small fixed runbook:
-     - reset environment,
-     - run N repeated trials,
-     - inspect failures,
-     - tag taxonomy,
-     - record decision notes.
+Milestone 1 tests:
 
-Important constraint:
+- Unit tests for AX stable ID generation and pruning behavior.
+- Unit tests for semantic action parsing and adapter prompt shaping.
+- Unit tests for macOS semantic target resolution and coordinate fallback.
+- Validation tests proving unsupported grader/check expressions fail fast.
+- `llm_judge` unit tests with mocked model responses.
 
-1. Do not try to make flaky live desktop execution a mandatory default CI gate in the first implementation.
-2. CI should protect harness correctness; manual or scheduled runs should answer agent performance questions.
+Milestone 2 tests:
 
-### 7. Migration And Rollback
+- Task loader tests for optional milestone schema.
+- Runner tests for milestone evaluation ordering and trace persistence.
+- Report tests for milestone rendering and new semantic-action accounting.
+- Failure-category tests only where the category is explicitly derivable from evidence.
 
-This project starts greenfield, so migration risk is low, but artifact stability still matters.
+Milestone 3 tests:
 
-1. Version the task schema from the start.
-2. Keep run artifacts append-only under `runs/` so historical evidence is preserved.
-3. Avoid hidden state in SQLite or a hosted service in the first version unless the value is immediate and obvious.
-4. If an adapter or observation path proves weak, disable it via config rather than removing core interfaces.
-5. If a framework integration such as Inspect AI is added later, keep it as an adapter layer that can be removed without changing task artifacts.
+- Capture tests verifying AX snapshots are written alongside screenshots.
+- Intent extraction tests verifying bounded AX context enters prompts correctly.
+- Backward-compatibility tests with AX capture disabled.
 
-Rollback strategy:
+Milestone 4 tests:
 
-1. The runner should degrade to the deterministic baseline even if live model adapters fail.
-2. The host-environment path should remain available even if VM integration is attempted and abandoned.
-3. Judge-based grading should always be optional and never the sole source of truth for starter tasks.
+- Adapter tests for routing heuristic selection.
+- Tests for fallback request behavior when AX coverage is sparse.
+- Comparison-report tests for new adapter naming and metrics.
+
+Manual / smoke verification:
+
+- One real macOS smoke path for the new adapter on `desktop_textedit_save`.
+- One manual capture/authoring session with AX enabled.
+- Comparison run matrix kept intentionally small until milestone trust is established.
+
+Legacy test handling:
+
+- Keep current `openai_cu`, `codex_subscription`, browser, and deterministic tests initially.
+- Update only the tests whose assumptions are truly obsolete.
+- Do not rewrite legacy adapter tests into the new architecture; add dedicated tests for the new path first.
+
+### 7. Migration and Rollback
+
+Migration strategy:
+
+- Add new capabilities behind new files and optional fields first.
+- Keep existing task files loadable without milestones.
+- Keep existing adapters registered and runnable during Milestones 1-4.
+- Promote the new adapter only after comparison evidence exists.
+
+Rollback strategy per phase:
+
+- Milestone 1 rollback:
+  - unregister the new adapter
+  - ignore structured AX evidence artifacts
+  - leave legacy runner/adapters untouched
+- Milestone 2 rollback:
+  - keep milestone fields optional and ignore them in the runner if needed
+- Milestone 3 rollback:
+  - disable AX capture and fall back to current screenshot/event flow
+- Milestone 4 rollback:
+  - disable cheap-first routing and use the stronger model only
+  - disable screenshot fallback if it introduces noise
+
+Comparison-preservation rule:
+
+- Do not remove `openai_cu` until the repo has enough runs to compare “old screenshot-first desktop” vs “new structured-state desktop” on the same trusted tasks.
+- Before demoting or removing any legacy path, preserve at least one stable comparison config and one representative comparison report artifact so later cleanup does not erase the learning record.
 
 ### 8. Manual Setup Tasks
 
-These should be documented explicitly because hidden setup destroys eval credibility.
-
-1. Install Python and the chosen project manager, preferably `uv`.
-2. Install browser dependencies if the browser executor uses Playwright.
-3. Grant macOS permissions required for:
-   - accessibility,
-   - screen recording,
-   - automation where needed.
-4. Choose and configure provider credentials for any live adapters.
-5. Decide which initial model conditions to compare.
-6. Decide whether Codex CLI runs should be authenticated through local login, API-backed provider config, or both.
-7. Prepare reproducible local fixtures for task assets such as test PDFs, CSVs, and target directories.
-8. Decide where run artifacts are stored locally and whether large screenshots should be ignored, compressed, or retained selectively.
-9. If VM isolation is later introduced, document the provisioning and reset steps separately instead of mixing them into the host setup path.
+- Choose a single strong structured-state model and a single cheap tier before Milestone 4; keep this configurable rather than hard-coding the research matrix into the architecture.
+- Confirm macOS Accessibility and Screen Recording permissions for the terminal/Python process used by the harness.
+- Prepare a stable local desktop task setup for:
+  - TextEdit
+  - Finder
+  - one browser app already represented in the repo
+- Add or update run configs for structured-state, comparison, and routed runs once the new adapter exists.
+- Decide whether `tasks/my-test-task/task.yaml` becomes:
+  - a repaired trusted task
+  - or an explicitly experimental/non-comparable task
 
 ### 9. Risks
 
-1. **Premature framework lock-in**
-   - If we start with a large eval framework, we may learn less about the actual harness problem.
-2. **Task schema overgrowth**
-   - The task artifact can easily become a workflow DSL. That would slow iteration and hide intent.
-3. **Observation bloat**
-   - Capturing too much screenshot history or metadata can increase cost and latency without enough quality gain.
-4. **Host-environment flakiness**
-   - Desktop state, permissions, and timing issues can create false negatives that look like model failures.
-5. **macOS AX incompleteness**
-   - AX may be unavailable or incomplete on important screens, forcing visual fallbacks.
-6. **Provider coupling**
-   - Codex CLI output conventions, OpenAI API behaviors, or model pricing and limits can change; adapters must absorb that change.
-7. **Weak graders**
-   - If grading is not objective, we will end up benchmarking grader noise rather than agent quality.
-8. **Task-suite bias**
-   - A narrow starter suite can overfit the harness to easy tasks and mislead us about general feasibility.
-9. **Recording-to-task complexity**
-   - Translating user evidence into clean intent may be substantially harder than executing authored tasks.
-10. **Invisible manual work**
-   - If task cleanup, permissions, or environment resets rely on undocumented operator behavior, the evals will not be trustworthy.
+- AX coverage on target macOS apps may be worse than expected.
+  - Mitigation: probe anchor apps early and gate fallback work on real coverage data.
+- Stable AX IDs may not remain reliable across state changes.
+  - Mitigation: start with pragmatic hash/path IDs plus coordinate fallback, and prove they work on short flows before investing in diffing.
+- The current environment/action boundary may still assume coordinates too often.
+  - Mitigation: keep semantic targeting inside `Action.params` first and resolve it inside the macOS environment rather than redesigning the global action model immediately.
+- Existing tasks and graders may be more invalid than they look.
+  - Mitigation: add validation early and treat unsupported tasks as untrusted until repaired.
+- Reporting may still be too thin to debug the new path.
+  - Mitigation: persist only decision-point evidence first, then widen if debugging still fails.
+- Existing tests may encode screenshot-first assumptions.
+  - Mitigation: preserve legacy tests where they still describe legacy behavior; add new tests instead of mutating unrelated ones.
+- Demoting `openai_cu` may have ripple effects in reporting and docs.
+  - Mitigation: defer naming/default changes until after comparison evidence exists.
+- Prompting and pruning choices may dominate outcomes more than model choice.
+  - Mitigation: keep the initial model matrix intentionally small and iterate on state quality first.
+- macOS focus, permission, and windowing issues may create misleading failures.
+  - Mitigation: keep initial tasks short, controlled, and explicitly milestone-checked.
+- Retina/HiDPI coordinate mismatch between AX tree and pyautogui.
+  - AXPosition and AXSize report in screen points. pyautogui on macOS should also use points, but this has not been verified empirically on the target hardware. If they diverge (e.g., pyautogui uses pixels on some configurations), every click silently misses by a 2x offset. Mitigation: include an explicit coordinate-space validation test in the M1 target resolution work — click a known AX element's center and verify the click lands on the correct control.
+- AX tree capture latency on complex apps.
+  - `_get_ax_tree()` traverses the full element tree via IPC to the target app. On simple apps (TextEdit) this is likely <100ms, but on complex apps (Chrome with many tabs) it could be >1s, which meaningfully slows the per-step loop. Mitigation: measure and log AX capture time during M1 serializer work. If latency is a problem, consider caching the tree within a single observe-then-resolve step or pruning depth more aggressively.
+- Product-direction enthusiasm could pull the harness into speculative abstractions.
+  - Mitigation: every added component must improve what the harness can prove now, not what a future product might need later.
 
 ### 10. Open Questions
 
-1. Should the first live model condition be OpenAI Responses computer-use, Codex CLI, or both in the same milestone?
-2. What is the exact minimum initial task suite size: 3 tasks for speed, or 5 to 6 tasks for better comparison coverage?
-3. Which browser and desktop automation primitives are least risky on macOS for the first executor implementation?
-4. Should the first task package permit embedded evidence references, or should evidence stay fully outside the schema until Milestone 6?
-5. When do we promote VM isolation from optional to required?
-6. Do we need an explicit human-baseline protocol in the PoC, or is agent-to-agent and baseline-to-agent comparison sufficient initially?
-7. Should judge-based graders be introduced only after the starter suite is exhausted programmatically, or earlier for specific UX-heavy tasks?
-8. How much effort should go into Codex OAuth and local CLI support before we have evidence that those paths are materially useful for the eval questions?
-9. Do we want run artifact persistence to remain file-based only, or do we need a lightweight local database once trial volume grows?
+- Should the first structured-state adapter use the existing `openai` dependency only, or introduce `anthropic`? Context: the research recommends Claude Sonnet 4.6, but the structured-state approach is model-agnostic — the prompt is text, the response is JSON, and any model with good structured-output handling can drive it. Using `openai` for M1 avoids a new dependency and lets the adapter work with GPT-4.1 or GPT-4.1-mini immediately. If the adapter's LLM call is cleanly abstracted (model name + client as constructor args), swapping to Anthropic later is a small change. The tradeoff: using OpenAI in M1 means the first comparison is structured-state-via-OpenAI vs screenshot-via-OpenAI, not a cross-provider comparison — which may actually be a cleaner experiment since it isolates the state-representation variable.
+- Is the cleanest milestone-check surface an extension of `VerificationCheck`, or a separate milestone-only predicate model?
+- Should `desktop_textedit_save` be upgraded in place to `version: "2.0"`, or should a separate v2 task file exist while the migration settles?
+- Is `tasks/my-test-task/task.yaml` worth repairing now, or should it be excluded from trusted evaluation until the new verifier/task schema lands?
+- Does `src/harness/reporting.py` need a dedicated evidence summary section, or is a link/reference to step evidence enough for the first pass?
 
-## Recommended First Implementation Order
+## Explicit Defer-Until-Later List
 
-If we start implementation immediately after this plan, the safest order is:
+- Cross-platform UIA / AT-SPI abstractions.
+- Full branch/recovery task graphs.
+- Learned routing or escalation classifiers.
+- Video-first capture overhaul and ScreenCaptureKit integration.
+- Vision-object parsers or OCR augmentation beyond a simple screenshot fallback.
+- Shared structured-state abstraction across browser and desktop adapters, unless duplication becomes painful after the desktop path proves out.
+- Removal of `openai_cu` or aggressive cleanup of legacy report structures.
 
-1. Milestone 1
-2. Milestone 2
-3. Milestone 3 with only one live adapter first
-4. Milestone 4
-5. Milestone 5
-6. Milestone 6
+## Recommended First Implementation Milestone
 
-The most important discipline is this: do not start with recording ingestion, VM isolation, hosted eval tooling, or generalized workflow abstractions. Start with one harness loop, a few real tasks, and explicit comparisons. That is the shortest path to learning what matters.
+Start with Milestone 1: Trustworthy AX Desktop Slice.
+
+That is the cleanest, lowest-complexity first build because it:
+
+- validates the structured-state hypothesis directly
+- keeps the current harness spine intact
+- fixes the minimum trust gaps that would otherwise invalidate the experiment
+- preserves old baselines for comparison
+- avoids spending early on routing, fallback vision, or recorder/platform work before the core desktop path proves itself

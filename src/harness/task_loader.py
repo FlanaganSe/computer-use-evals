@@ -2,21 +2,77 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from harness.types import Task
+from harness.types import Task, VerificationCheck
+
+logger = logging.getLogger(__name__)
+
+# Supported programmatic check function names.
+_SUPPORTED_CHECKS = frozenset(
+    {
+        "file_exists",
+        "file_contains",
+        "form_submitted",
+        "app_focused",
+    }
+)
 
 
-def load_task(path: str | Path, overrides: dict[str, str] | None = None) -> Task:
+def validate_check_expression(check: VerificationCheck) -> list[str]:
+    """Validate a verification check expression. Returns a list of warnings.
+
+    Raises ValueError for unsupported/invalid check expressions that would
+    silently produce misleading results.
+    """
+    warnings: list[str] = []
+
+    if check.method == "programmatic" and check.check is not None:
+        expr = check.check
+
+        # Reject boolean operators — these are not supported by the expression evaluator
+        if " and " in expr or " or " in expr or expr.startswith("not "):
+            msg = (
+                f"Unsupported boolean expression in check: {expr!r}. "
+                "Only single function calls are supported "
+                "(e.g., file_contains('path', 'text'))."
+            )
+            raise ValueError(msg)
+
+        # Warn about unknown function names
+        func_match = re.match(r"(\w+)\(", expr)
+        if func_match:
+            func_name = func_match.group(1)
+            if func_name not in _SUPPORTED_CHECKS:
+                warnings.append(
+                    f"Unknown check function '{func_name}' in expression: {expr!r}. "
+                    f"Supported: {sorted(_SUPPORTED_CHECKS)}"
+                )
+
+    if check.method == "llm_judge" and not check.prompt:
+        warnings.append("llm_judge check has no prompt — grading may produce poor results")
+
+    return warnings
+
+
+def load_task(
+    path: str | Path,
+    overrides: dict[str, str] | None = None,
+    *,
+    strict: bool = True,
+) -> Task:
     """Load a task YAML, validate it, and substitute variables.
 
     Args:
         path: Path to the task YAML file.
         overrides: Optional variable overrides (name -> value).
+        strict: If True (default), raise ValueError for unsupported check
+            expressions. If False, log warnings instead.
 
     Returns:
         A validated Task with variables substituted into goal.description
@@ -29,7 +85,23 @@ def load_task(path: str | Path, overrides: dict[str, str] | None = None) -> Task
         raise ValueError(msg)
 
     task = Task.model_validate(raw)
-    return _substitute_variables(task, overrides or {})
+    task = _substitute_variables(task, overrides or {})
+
+    # Validate check expressions
+    all_checks = [task.verification.primary]
+    if task.verification.fallback:
+        all_checks.append(task.verification.fallback)
+    for milestone in task.milestones:
+        all_checks.append(milestone.check)
+
+    for check in all_checks:
+        warnings = validate_check_expression(check)
+        for w in warnings:
+            if strict:
+                raise ValueError(w)
+            logger.warning("Task %s: %s", task.task_id, w)
+
+    return task
 
 
 def _resolve_variables(task: Task, overrides: dict[str, str]) -> dict[str, str]:

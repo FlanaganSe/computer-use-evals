@@ -94,15 +94,34 @@ class TaskGoal(BaseModel):
 
 
 class VerificationCheck(BaseModel):
-    method: Literal["programmatic", "llm_judge"]
+    method: Literal["programmatic", "llm_judge", "ax_contains"]
     check: str | None = None
     prompt: str | None = None
     threshold: float | None = None
+    # For ax_contains method
+    role: str | None = None
+    value: str | None = None
 
 
 class TaskVerification(BaseModel):
     primary: VerificationCheck
     fallback: VerificationCheck | None = None
+
+
+class Milestone(BaseModel):
+    """An intermediate checkpoint within a task."""
+
+    id: str
+    description: str
+    check: VerificationCheck
+
+
+class MilestoneResult(BaseModel):
+    """Result of evaluating a single milestone."""
+
+    id: str
+    passed: bool
+    explanation: str = ""
 
 
 class Task(BaseModel):
@@ -116,6 +135,7 @@ class Task(BaseModel):
     verification: TaskVerification
     cleanup_script: str | None = None
     environment: str | None = None
+    milestones: list[Milestone] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

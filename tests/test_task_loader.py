@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from harness.task_loader import load_task
+from harness.task_loader import load_task, validate_check_expression
+from harness.types import VerificationCheck
 
 
 @pytest.fixture()
@@ -106,4 +107,139 @@ class TestValidationErrors:
         data = {k: v for k, v in VALID_TASK.items() if k != "goal"}
         path = _write_task(task_dir, data)
         with pytest.raises(Exception):
+            load_task(path)
+
+
+# ---------------------------------------------------------------------------
+# Check expression validation
+# ---------------------------------------------------------------------------
+
+
+class TestCheckValidation:
+    def test_valid_file_exists(self) -> None:
+        check = VerificationCheck(method="programmatic", check="file_exists('test.pdf')")
+        warnings = validate_check_expression(check)
+        assert warnings == []
+
+    def test_valid_file_contains(self) -> None:
+        check = VerificationCheck(method="programmatic", check="file_contains('/tmp/x', 'hello')")
+        warnings = validate_check_expression(check)
+        assert warnings == []
+
+    def test_rejects_boolean_and(self) -> None:
+        check = VerificationCheck(
+            method="programmatic",
+            check="app_opened('TextEdit') and not form_submitted('Sean', 'x')",
+        )
+        with pytest.raises(ValueError, match="boolean expression"):
+            validate_check_expression(check)
+
+    def test_rejects_boolean_or(self) -> None:
+        check = VerificationCheck(
+            method="programmatic",
+            check="file_exists('a') or file_exists('b')",
+        )
+        with pytest.raises(ValueError, match="boolean expression"):
+            validate_check_expression(check)
+
+    def test_warns_unknown_function(self) -> None:
+        check = VerificationCheck(method="programmatic", check="unknown_func('x')")
+        warnings = validate_check_expression(check)
+        assert len(warnings) == 1
+        assert "unknown_func" in warnings[0]
+
+    def test_warns_llm_judge_no_prompt(self) -> None:
+        check = VerificationCheck(method="llm_judge")
+        warnings = validate_check_expression(check)
+        assert len(warnings) == 1
+        assert "no prompt" in warnings[0]
+
+    def test_valid_llm_judge_with_prompt(self) -> None:
+        check = VerificationCheck(method="llm_judge", prompt="Did it work?")
+        warnings = validate_check_expression(check)
+        assert warnings == []
+
+
+class TestStrictValidation:
+    def test_strict_rejects_boolean_task(self, task_dir: Path) -> None:
+        data = {
+            **VALID_TASK,
+            "verification": {
+                "primary": {
+                    "method": "programmatic",
+                    "check": "file_exists('a') and file_exists('b')",
+                }
+            },
+        }
+        path = _write_task(task_dir, data)
+        with pytest.raises(ValueError, match="boolean expression"):
+            load_task(path, strict=True)
+
+    def test_non_strict_warns_only(self, task_dir: Path) -> None:
+        data = {
+            **VALID_TASK,
+            "verification": {
+                "primary": {
+                    "method": "programmatic",
+                    "check": "unknown_func('x')",
+                }
+            },
+        }
+        path = _write_task(task_dir, data)
+        with pytest.raises(ValueError, match="unknown_func"):
+            load_task(path, strict=True)
+
+    def test_non_strict_loads_with_warnings(self, task_dir: Path) -> None:
+        data = {
+            **VALID_TASK,
+            "verification": {
+                "primary": {
+                    "method": "programmatic",
+                    "check": "unknown_func('x')",
+                }
+            },
+        }
+        path = _write_task(task_dir, data)
+        task = load_task(path, strict=False)
+        assert task.task_id == "browser-download"
+
+
+class TestMilestoneLoading:
+    def test_loads_task_with_milestones(self, task_dir: Path) -> None:
+        data = {
+            **VALID_TASK,
+            "milestones": [
+                {
+                    "id": "file_created",
+                    "description": "File exists",
+                    "check": {"method": "programmatic", "check": "file_exists('test.pdf')"},
+                }
+            ],
+        }
+        path = _write_task(task_dir, data)
+        task = load_task(path)
+        assert len(task.milestones) == 1
+        assert task.milestones[0].id == "file_created"
+
+    def test_loads_task_without_milestones(self, task_dir: Path) -> None:
+        path = _write_task(task_dir, VALID_TASK)
+        task = load_task(path)
+        assert task.milestones == []
+
+    def test_milestone_check_validated(self, task_dir: Path) -> None:
+        data = {
+            **VALID_TASK,
+            "milestones": [
+                {
+                    "id": "bad",
+                    "description": "Bad check",
+                    "check": {
+                        "method": "programmatic",
+                        "check": "foo('x') and bar('y')",
+                    },
+                }
+            ],
+        }
+        path = _write_task(task_dir, data)
+        with pytest.raises(ValueError, match="boolean expression"):
             load_task(path)

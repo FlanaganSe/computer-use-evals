@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from harness.ax_state import AXNode, build_ax_tree, find_node_by_id
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class MacOSDesktopEnvironment:
         self._run_dir: Path | None = None
         self._screenshots_dir: Path | None = None
         self._target_app: str | None = None
+        self._last_ax_tree: AXNode | None = None
 
     # ------------------------------------------------------------------
     # Permission checks
@@ -107,6 +109,7 @@ class MacOSDesktopEnvironment:
         if observation_type in (ObservationType.SCREENSHOT, ObservationType.SCREENSHOT_AND_ARIA):
             screenshot = await _take_screenshot()
 
+        ax_tree_structured: AXNode | None = None
         if observation_type in (ObservationType.ARIA_STATE, ObservationType.SCREENSHOT_AND_ARIA):
             pid = window_info.get("focused_pid")
             if pid is not None:
@@ -116,10 +119,12 @@ class MacOSDesktopEnvironment:
                     a11y_available = True
                 else:
                     a11y_available = False
+                # Build structured tree in parallel (for adapters that need it)
+                ax_tree_structured = _get_structured_ax_tree(pid)
             else:
                 a11y_available = False
 
-        return Observation(
+        obs = Observation(
             observation_type=observation_type,
             screenshot=screenshot,
             aria_snapshot=aria_snapshot,
@@ -127,10 +132,37 @@ class MacOSDesktopEnvironment:
             focused_app=focused_app,
             a11y_available=a11y_available,
         )
+        # Attach structured tree as side-channel for adapters that use it.
+        # This avoids changing the Observation model while keeping the data available.
+        obs._ax_tree = ax_tree_structured  # type: ignore[attr-defined]
+        self._last_ax_tree = ax_tree_structured
+        return obs
+
+    def resolve_semantic_target(self, action: Action) -> Action:
+        """If action has a semantic_target but no x/y, resolve from AX tree.
+
+        Returns the action unchanged if no resolution is needed or possible.
+        """
+        params = action.params
+        target_id = params.get("semantic_target")
+        if target_id is None or ("x" in params and "y" in params):
+            return action
+
+        if self._last_ax_tree is None:
+            return action
+
+        node = find_node_by_id(self._last_ax_tree, target_id)
+        if node is not None and node.center is not None:
+            new_params = {**params, "x": node.center[0], "y": node.center[1]}
+            return Action(action_type=action.action_type, params=new_params)
+
+        return action
 
     async def execute_action(self, action: Action) -> str:
         import pyautogui  # type: ignore[import-untyped]
 
+        # Resolve semantic targets to coordinates if needed
+        action = self.resolve_semantic_target(action)
         params = action.params
 
         match action.action_type:
@@ -302,6 +334,18 @@ def _get_ax_tree(pid: int) -> str | None:
         return tree if tree.strip() else None
     except Exception:
         logger.debug("Failed to get AX tree for PID %d", pid, exc_info=True)
+        return None
+
+
+def _get_structured_ax_tree(pid: int) -> AXNode | None:
+    """Get structured AX tree with stable IDs for an app by PID."""
+    try:
+        from ApplicationServices import AXUIElementCreateApplication
+
+        app_ref = AXUIElementCreateApplication(pid)
+        return build_ax_tree(app_ref)
+    except Exception:
+        logger.debug("Failed to get structured AX tree for PID %d", pid, exc_info=True)
         return None
 
 

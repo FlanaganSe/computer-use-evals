@@ -1,9 +1,10 @@
-"""Tests for programmatic graders."""
+"""Tests for programmatic and LLM-based graders."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from harness.graders import FORM_SUBMISSION_PATH, grade
 from harness.types import Task, TaskGoal, TaskVerification, VerificationCheck
@@ -100,19 +101,148 @@ class TestGraderEdgeCases:
         assert result.passed is False
         assert "Unknown" in result.explanation
 
-    def test_unimplemented_method(self, tmp_path: Path) -> None:
+    def test_ax_contains_method_not_implemented(self, tmp_path: Path) -> None:
         task = Task(
             task_id="test",
             version="1.0",
             goal=TaskGoal(description="Test"),
             verification=TaskVerification(
-                primary=VerificationCheck(
-                    method="llm_judge",
-                    prompt="Did it work?",
-                    threshold=0.85,
-                ),
+                primary=VerificationCheck(method="ax_contains", role="AXTextArea", value="hello"),
             ),
         )
         result = grade(task, tmp_path)
         assert result.passed is False
         assert "not implemented" in result.explanation
+
+
+# ---------------------------------------------------------------------------
+# LLM judge grader
+# ---------------------------------------------------------------------------
+
+
+class TestLlmJudge:
+    def test_llm_judge_passes(self, tmp_path: Path) -> None:
+        task = Task(
+            task_id="test",
+            version="1.0",
+            goal=TaskGoal(description="Save a file"),
+            verification=TaskVerification(
+                primary=VerificationCheck(
+                    method="llm_judge",
+                    prompt="Did the file get saved?",
+                    threshold=0.5,
+                ),
+            ),
+        )
+
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(
+                    content=json.dumps(
+                        {"passed": True, "confidence": 0.9, "explanation": "File was saved"}
+                    )
+                )
+            )
+        ]
+
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}),
+            patch("openai.OpenAI") as mock_openai_cls,
+        ):
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+            mock_client.chat.completions.create.return_value = mock_response
+
+            result = grade(task, tmp_path)
+
+        assert result.passed is True
+        assert result.method == "llm_judge"
+        assert "saved" in result.explanation
+
+    def test_llm_judge_fails_below_threshold(self, tmp_path: Path) -> None:
+        task = Task(
+            task_id="test",
+            version="1.0",
+            goal=TaskGoal(description="Save a file"),
+            verification=TaskVerification(
+                primary=VerificationCheck(
+                    method="llm_judge",
+                    prompt="Did the file get saved?",
+                    threshold=0.9,
+                ),
+            ),
+        )
+
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(
+                    content=json.dumps(
+                        {"passed": True, "confidence": 0.6, "explanation": "Maybe saved"}
+                    )
+                )
+            )
+        ]
+
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}),
+            patch("openai.OpenAI") as mock_openai_cls,
+        ):
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+            mock_client.chat.completions.create.return_value = mock_response
+
+            result = grade(task, tmp_path)
+
+        assert result.passed is False
+        assert "threshold" in result.explanation
+
+    def test_llm_judge_no_api_key(self, tmp_path: Path) -> None:
+        task = Task(
+            task_id="test",
+            version="1.0",
+            goal=TaskGoal(description="Test"),
+            verification=TaskVerification(
+                primary=VerificationCheck(method="llm_judge", prompt="Did it work?"),
+            ),
+        )
+
+        with patch.dict("os.environ", {}, clear=True):
+            result = grade(task, tmp_path)
+
+        assert result.passed is False
+        assert "OPENAI_API_KEY" in result.explanation
+
+    def test_llm_judge_with_default_prompt(self, tmp_path: Path) -> None:
+        task = Task(
+            task_id="test",
+            version="1.0",
+            goal=TaskGoal(description="Open TextEdit"),
+            verification=TaskVerification(
+                primary=VerificationCheck(method="llm_judge"),
+            ),
+        )
+
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(
+                    content=json.dumps(
+                        {"passed": True, "confidence": 0.8, "explanation": "App opened"}
+                    )
+                )
+            )
+        ]
+
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}),
+            patch("openai.OpenAI") as mock_openai_cls,
+        ):
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+            mock_client.chat.completions.create.return_value = mock_response
+
+            result = grade(task, tmp_path)
+
+        assert result.passed is True

@@ -17,6 +17,7 @@ import yaml
 from harness.adapters.codex_subscription import CodexSubscriptionAdapter
 from harness.adapters.deterministic import DeterministicAdapter
 from harness.adapters.openai_cu import OpenAIComputerUseAdapter
+from harness.adapters.structured_state_desktop import StructuredStateDesktopAdapter
 from harness.environments.browser import BrowserEnvironment
 from harness.environments.macos import MacOSDesktopEnvironment
 from harness.failures import FailureCategory
@@ -38,6 +39,7 @@ ADAPTERS: dict[str, _AdapterFactory] = {
     "openai_cu": OpenAIComputerUseAdapter,
     "openai_cu_hybrid": lambda: OpenAIComputerUseAdapter(hybrid=True),
     "codex_subscription": CodexSubscriptionAdapter,
+    "structured_state_desktop": StructuredStateDesktopAdapter,
 }
 
 ENVIRONMENTS: dict[str, type] = {
@@ -205,6 +207,12 @@ async def _run_task_async(
     report_md = generate_report(task, trace, grader_result, run_dir)
     (run_dir / "report.md").write_text(report_md)
 
+    # Persist decision-point evidence if the adapter collected it
+    if hasattr(adapter, "get_step_evidence"):
+        evidence = adapter.get_step_evidence()
+        if evidence:
+            _write_evidence(evidence, run_dir)
+
     return run_dir
 
 
@@ -227,6 +235,11 @@ def _write_trace(trace: Trace, run_dir: Path) -> None:
 def _write_grade(result: GraderResult, run_dir: Path) -> None:
     data = json.loads(result.model_dump_json())
     (run_dir / "grade.json").write_text(json.dumps(data, indent=2))
+
+
+def _write_evidence(evidence: list[dict[str, Any]], run_dir: Path) -> None:
+    """Persist decision-point evidence from the adapter."""
+    (run_dir / "evidence.json").write_text(json.dumps(evidence, indent=2, default=str))
 
 
 def _load_setup_module(setup_script: str | None) -> Any:

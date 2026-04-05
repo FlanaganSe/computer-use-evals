@@ -1,14 +1,21 @@
-"""Programmatic graders for verifying task outcomes."""
+"""Programmatic and LLM-based graders for verifying task outcomes."""
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from pathlib import Path
 
 from harness.types import GraderResult, Task, VerificationCheck
 
+logger = logging.getLogger(__name__)
+
 FORM_SUBMISSION_PATH = Path("/tmp/harness_form_submission.json")
+
+# Model for llm_judge grading
+_LLM_JUDGE_MODEL = "gpt-4.1-mini"
 
 
 def _parse_quoted_args(s: str) -> list[str]:
@@ -24,6 +31,10 @@ def _parse_quoted_args(s: str) -> list[str]:
 def grade(task: Task, run_dir: Path) -> GraderResult:
     """Run the primary verification check for a task."""
     check = task.verification.primary
+
+    if check.method == "llm_judge":
+        return _grade_llm_judge(check, task, run_dir)
+
     if check.method != "programmatic":
         return GraderResult(
             passed=False,
@@ -59,6 +70,9 @@ def _eval_check(check: VerificationCheck, run_dir: Path) -> GraderResult:
 
     if expr.startswith("form_submitted("):
         return _check_form_submitted(expr)
+
+    if expr.startswith("app_focused("):
+        return _check_app_focused(expr)
 
     return GraderResult(
         passed=False,
@@ -195,5 +209,141 @@ def _check_form_submitted(expr: str) -> GraderResult:
         details={
             "expected": {"name": expected_name, "email": expected_email},
             "actual": {"name": actual_name, "email": actual_email},
+        },
+    )
+
+
+def _check_app_focused(expr: str) -> GraderResult:
+    """Check whether the specified app is the frontmost application.
+
+    Expects: app_focused('AppName')
+    """
+    inner = expr.removeprefix("app_focused(").removesuffix(")")
+    app_name = inner.strip("'\"")
+
+    try:
+        import Quartz  # type: ignore[import-untyped]
+
+        workspace = Quartz.NSWorkspace.sharedWorkspace()
+        front_app = workspace.frontmostApplication()
+        actual_name: str = front_app.localizedName()
+
+        if actual_name == app_name:
+            return GraderResult(
+                passed=True,
+                method="app_focused",
+                explanation=f"{app_name} is the focused app",
+            )
+        return GraderResult(
+            passed=False,
+            method="app_focused",
+            explanation=f"Expected {app_name}, but {actual_name} is focused",
+            details={"expected": app_name, "actual": actual_name},
+        )
+    except ImportError:
+        return GraderResult(
+            passed=False,
+            method="app_focused",
+            explanation="Quartz not available — cannot check focused app",
+        )
+
+
+# ---------------------------------------------------------------------------
+# LLM judge grader
+# ---------------------------------------------------------------------------
+
+
+def _grade_llm_judge(check: VerificationCheck, task: Task, run_dir: Path) -> GraderResult:
+    """Grade a task using an LLM judge.
+
+    Sends the task description and check prompt to a cheap model and asks
+    for a pass/fail judgment with explanation.
+    """
+    prompt = check.prompt
+    if not prompt:
+        prompt = f"Did the following task succeed? Task: {task.goal.description}"
+
+    threshold = check.threshold or 0.5
+
+    try:
+        return _call_llm_judge(prompt, task, run_dir, threshold)
+    except Exception as exc:
+        logger.error("LLM judge failed: %s", exc)
+        return GraderResult(
+            passed=False,
+            method="llm_judge",
+            explanation=f"LLM judge error: {exc}",
+        )
+
+
+def _call_llm_judge(prompt: str, task: Task, run_dir: Path, threshold: float) -> GraderResult:
+    """Make the actual LLM judge API call."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return GraderResult(
+            passed=False,
+            method="llm_judge",
+            explanation="OPENAI_API_KEY not set — cannot run LLM judge",
+        )
+
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+
+    # Build context from available artifacts
+    context_parts = [f"Task: {task.goal.description}", f"Evaluation prompt: {prompt}"]
+
+    # Include trace if available
+    trace_path = run_dir / "trace.json"
+    if trace_path.exists():
+        trace_text = trace_path.read_text()[:2000]
+        context_parts.append(f"Run trace (truncated):\n{trace_text}")
+
+    response = client.chat.completions.create(
+        model=_LLM_JUDGE_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an evaluation judge. Given a task description and "
+                    "evaluation criteria, determine if the task succeeded. "
+                    "Respond with a JSON object: "
+                    '{"passed": true/false, "confidence": 0.0-1.0, "explanation": "..."}'
+                ),
+            },
+            {"role": "user", "content": "\n\n".join(context_parts)},
+        ],
+        temperature=0,
+        max_completion_tokens=256,
+        response_format={"type": "json_object"},
+    )
+
+    raw = response.choices[0].message.content or "{}"
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        return GraderResult(
+            passed=False,
+            method="llm_judge",
+            explanation=f"Could not parse LLM judge response: {raw[:200]}",
+        )
+
+    passed = bool(result.get("passed", False))
+    confidence = float(result.get("confidence", 0.0))
+    explanation = str(result.get("explanation", "No explanation"))
+
+    # Apply threshold
+    if passed and confidence < threshold:
+        passed = False
+        explanation = f"Passed but below confidence threshold ({confidence:.2f} < {threshold:.2f}): {explanation}"
+
+    return GraderResult(
+        passed=passed,
+        method="llm_judge",
+        explanation=explanation,
+        details={
+            "confidence": confidence,
+            "threshold": threshold,
+            "model": _LLM_JUDGE_MODEL,
         },
     )

@@ -1,5 +1,5 @@
 task_id: "desktop-textedit-save"
-version: "1.0"
+version: "2.0"
 environment: "macos_desktop"
 
 goal:
@@ -15,6 +15,18 @@ goal:
       type: "path"
       default: "/tmp/harness_desktop_test"
 
+milestones:
+  - id: textedit_open
+    description: "TextEdit is the focused app"
+    check:
+      method: "programmatic"
+      check: "app_focused('TextEdit')"
+  - id: file_saved
+    description: "File exists at target path"
+    check:
+      method: "programmatic"
+      check: "file_contains('{{directory}}/{{filename}}', '{{content}}')"
+
 preconditions:
   - "macOS with Accessibility permission granted"
   - "Screen Recording permission granted"
@@ -24,6 +36,6 @@ setup_script: "tasks/desktop_textedit_save/setup.py"
 verification:
   primary:
     method: "programmatic"
-    check: "file_contains('/tmp/harness_desktop_test/harness-test.txt', 'Hello from the eval harness')"
+    check: "file_contains('{{directory}}/{{filename}}', '{{content}}')"
 
 cleanup_script: null

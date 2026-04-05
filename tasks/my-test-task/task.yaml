@@ -1,0 +1,62 @@
+task_id: fill-zillow-request-and-create-textedit-note
+version: '2.0'
+environment: macos_desktop
+# NOTE: This task is excluded from trusted comparison runs until its
+# verification logic can be grounded in concrete programmatic checks.
+# The original boolean expression (app_opened() and not form_submitted())
+# was unsupported and produced misleading results.
+goal:
+  description: '1. In the browser on the Zillow apartment listings page, open a unit''s
+    contact/request form.
+
+    2. Click into the "First & last name" field and enter ''{{name}}''.
+
+    3. Press Tab to move to the next field and enter ''{{message_or_second_field_text}}''.
+
+    4. Click away from the form and then close or dismiss the request form without
+    submitting it.
+
+    5. Open Spotlight search.
+
+    6. Search for TextEdit by typing ''{{app_search}}'' and launch it.
+
+    7. In the TextEdit open dialog, choose to create a new document.
+
+    8. In the new TextEdit document, type ''{{document_text}}''.
+
+    9. Delete that initial character and replace it by typing ''{{replacement_text}}'',
+    then press Return so the document contains the replacement text followed by a
+    newline.
+
+    10. Click the document window''s close button.
+
+    11. Use the keyboard shortcuts shown to navigate or dismiss after closing, without
+    saving the document.
+
+    '
+  variables:
+    name:
+      type: string
+      default: Sean
+    message_or_second_field_text:
+      type: string
+      default: Flaksjdf
+    app_search:
+      type: string
+      default: text edit
+    document_text:
+      type: string
+      default: T
+    replacement_text:
+      type: string
+      default: 'Yes'
+preconditions:
+- A macOS desktop session is open with a browser already displaying a Zillow apartment
+  listings page that has a request/contact form available.
+- TextEdit is installed and available through Spotlight.
+- No saved output file is required before starting.
+verification:
+  primary:
+    method: llm_judge
+    prompt: "Did the user complete the multi-step workflow: filling out a Zillow form without submitting, then opening TextEdit, typing replacement text, and closing without saving?"
+    threshold: 0.7
