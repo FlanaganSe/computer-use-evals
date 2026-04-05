@@ -43,6 +43,21 @@ class TestStableIds:
         # "ax_" + 12 hex chars = 15
         assert len(node_id) == 15
 
+    def test_sibling_index_zero_unchanged(self) -> None:
+        """sibling_index=0 produces the same ID as omitting it (backward compat)."""
+        id_default = _make_node_id("AXButton", "Save", "/app")
+        id_zero = _make_node_id("AXButton", "Save", "/app", 0)
+        assert id_default == id_zero
+
+    def test_sibling_index_disambiguates(self) -> None:
+        """Siblings with the same role+title get different IDs via sibling index."""
+        id0 = _make_node_id("AXButton", "", "/toolbar")
+        id1 = _make_node_id("AXButton", "", "/toolbar", 1)
+        id2 = _make_node_id("AXButton", "", "/toolbar", 2)
+        assert id0 != id1
+        assert id1 != id2
+        assert id0 != id2
+
 
 # ---------------------------------------------------------------------------
 # AXNode model
@@ -362,3 +377,60 @@ class TestCoverageStats:
         stats = coverage_stats(tree)
         # Window + Close + Minimize + TextArea + Bold = 5 nodes with bounds
         assert stats["nodes_with_bounds"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Sibling disambiguation
+# ---------------------------------------------------------------------------
+
+
+class TestSiblingDisambiguation:
+    def test_duplicate_siblings_get_unique_ids(self) -> None:
+        """Multiple untitled AXButton children must each get a unique node_id."""
+        data = {
+            "role": "AXApplication",
+            "title": "App",
+            "children": [
+                {"role": "AXButton", "title": "", "enabled": True, "bounds": [10, 10, 14, 14]},
+                {"role": "AXButton", "title": "", "enabled": True, "bounds": [30, 10, 14, 14]},
+                {"role": "AXButton", "title": "", "enabled": True, "bounds": [50, 10, 14, 14]},
+            ],
+        }
+        tree = build_ax_tree_from_dict(data)
+        assert tree is not None
+        ids = [child.node_id for child in tree.children]
+        assert len(ids) == 3
+        assert len(set(ids)) == 3, f"Expected 3 unique IDs, got {ids}"
+
+    def test_distinct_siblings_still_unique(self) -> None:
+        """Siblings with different titles are still unique (regression check)."""
+        data = {
+            "role": "AXWindow",
+            "title": "Win",
+            "children": [
+                {"role": "AXButton", "title": "Close", "enabled": True},
+                {"role": "AXButton", "title": "Minimize", "enabled": True},
+                {"role": "AXButton", "title": "Zoom", "enabled": True},
+            ],
+        }
+        tree = build_ax_tree_from_dict(data)
+        assert tree is not None
+        ids = [child.node_id for child in tree.children]
+        assert len(set(ids)) == 3
+
+    def test_find_node_with_disambiguated_ids(self) -> None:
+        """find_node_by_id returns the correct sibling, not just the first match."""
+        data = {
+            "role": "AXApplication",
+            "title": "App",
+            "children": [
+                {"role": "AXButton", "title": "", "bounds": [10, 10, 14, 14]},
+                {"role": "AXButton", "title": "", "bounds": [30, 10, 14, 14]},
+                {"role": "AXButton", "title": "", "bounds": [50, 10, 14, 14]},
+            ],
+        }
+        tree = build_ax_tree_from_dict(data)
+        assert tree is not None
+        for child in tree.children:
+            found = find_node_by_id(tree, child.node_id)
+            assert found is child

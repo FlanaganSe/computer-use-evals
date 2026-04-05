@@ -98,19 +98,23 @@ class AXNode(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _make_node_id(role: str, title: str, ancestry_path: str) -> str:
+def _make_node_id(role: str, title: str, ancestry_path: str, sibling_index: int = 0) -> str:
     """Generate a stable, short node ID from role + title + ancestry path.
 
     Uses a truncated SHA-256 so IDs are deterministic across runs for the
     same UI structure, but short enough for LLM prompts.
 
+    The sibling_index disambiguates siblings that share the same role and
+    title (e.g. multiple untitled AXButton elements in a toolbar). It is
+    only included in the hash when > 0 so that existing IDs for unique
+    siblings remain stable.
+
     12 hex chars = 48 bits of ID space, giving negligible collision risk
     across typical screen sizes (~50 elements) and multi-step runs.
-    Note: root nodes with the same role+title across different steps will
-    share IDs — this is expected since the ID represents the structural
-    identity, not the temporal instance.
     """
     key = f"{ancestry_path}/{role}:{title}"
+    if sibling_index > 0:
+        key = f"{key}#{sibling_index}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     return f"ax_{digest}"
 
@@ -154,6 +158,7 @@ def build_ax_tree(
     depth: int = 0,
     max_depth: int = 10,
     ancestry_path: str = "",
+    sibling_index: int = 0,
 ) -> AXNode | None:
     """Recursively build a structured AXNode tree from a pyobjc AXUIElement.
 
@@ -177,12 +182,19 @@ def build_ax_tree(
     bounds = _get_bounds(element)
 
     current_path = f"{ancestry_path}/{role}:{title}"
-    node_id = _make_node_id(role, title, ancestry_path)
+    node_id = _make_node_id(role, title, ancestry_path, sibling_index)
 
     children: list[AXNode] = []
     ax_children = _get_attr(element, "AXChildren") or []
+    # Track sibling signature counts to disambiguate children with same role+title
+    sibling_counts: dict[str, int] = {}
     for child in ax_children:
-        child_node = build_ax_tree(child, depth + 1, max_depth, current_path)
+        child_role = _get_attr(child, "AXRole") or "unknown"
+        child_title = str(_get_attr(child, "AXTitle") or "")
+        sig = f"{child_role}:{child_title}"
+        child_idx = sibling_counts.get(sig, 0)
+        sibling_counts[sig] = child_idx + 1
+        child_node = build_ax_tree(child, depth + 1, max_depth, current_path, child_idx)
         if child_node is not None:
             children.append(child_node)
 
@@ -209,6 +221,7 @@ def build_ax_tree_from_dict(
     depth: int = 0,
     max_depth: int = 10,
     ancestry_path: str = "",
+    sibling_index: int = 0,
 ) -> AXNode | None:
     """Build an AXNode tree from a dict representation (for testing)."""
     if depth > max_depth:
@@ -224,11 +237,19 @@ def build_ax_tree_from_dict(
     bounds = tuple(raw_bounds) if raw_bounds is not None and len(raw_bounds) == 4 else None
 
     current_path = f"{ancestry_path}/{role}:{title}"
-    node_id = _make_node_id(role, title, ancestry_path)
+    node_id = _make_node_id(role, title, ancestry_path, sibling_index)
 
     children: list[AXNode] = []
+    sibling_counts: dict[str, int] = {}
     for child_data in data.get("children", []):
-        child_node = build_ax_tree_from_dict(child_data, depth + 1, max_depth, current_path)
+        child_role = child_data.get("role", "unknown")
+        child_title = child_data.get("title", "")
+        sig = f"{child_role}:{child_title}"
+        child_idx = sibling_counts.get(sig, 0)
+        sibling_counts[sig] = child_idx + 1
+        child_node = build_ax_tree_from_dict(
+            child_data, depth + 1, max_depth, current_path, child_idx
+        )
         if child_node is not None:
             children.append(child_node)
 
