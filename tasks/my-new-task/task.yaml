@@ -1,0 +1,38 @@
+task_id: create-calendar-event
+version: '2.0'
+environment: macos_desktop
+
+goal:
+  description: |
+    1. Open Spotlight search.
+    2. Type '{{app_query}}' and launch the Calendar app.
+    3. In Calendar's month view, right-click on a date to open the context menu.
+    4. Create a new event from the context menu.
+    5. Type '{{event_title}}' as the event title.
+    6. Confirm the event creation.
+    7. Close the event popover/window.
+  variables:
+    app_query:
+      type: string
+      default: calendar
+    event_title:
+      type: string
+      default: "new event!"
+
+milestones:
+  - id: calendar_open
+    description: "Calendar is the focused app"
+    check:
+      method: "programmatic"
+      check: "app_focused('Calendar')"
+
+preconditions:
+  - "macOS with Accessibility and Screen Recording permissions granted"
+  - "Calendar.app installed and available via Spotlight"
+
+setup_script: "tasks/my-new-task/setup.py"
+
+verification:
+  primary:
+    method: "programmatic"
+    check: "script_check('tasks/my-new-task/verify.py')"

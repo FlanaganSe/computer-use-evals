@@ -1,0 +1,33 @@
+task_id: "desktop-calendar-event"
+version: "2.0"
+environment: "macos_desktop"
+
+goal:
+  description: "Open Calendar, create a new event titled '{{event_title}}' for today"
+  variables:
+    event_title:
+      type: "string"
+      default: "Harness Test Event"
+
+milestones:
+  - id: calendar_open
+    description: "Calendar is the focused app"
+    check:
+      method: "programmatic"
+      check: "app_focused('Calendar')"
+  - id: event_created
+    description: "Event exists in Calendar"
+    check:
+      method: "programmatic"
+      check: "script_check('tasks/desktop_calendar_event/verify.py')"
+
+preconditions:
+  - "macOS with Accessibility permission granted"
+  - "Screen Recording permission granted"
+
+setup_script: "tasks/desktop_calendar_event/setup.py"
+
+verification:
+  primary:
+    method: "programmatic"
+    check: "script_check('tasks/desktop_calendar_event/verify.py')"
