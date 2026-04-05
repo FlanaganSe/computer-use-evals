@@ -1,645 +1,177 @@
-# Desktop Agent Eval Harness — Implementation Plan
+# Implementation Plan: Accessibility-First Eval Harness Rewrite
 
 ## Contract
 
-### 1. Problem
+### Problem
 
-We need a macOS-first proof-of-concept eval harness that helps us understand whether agents can reliably execute browser and desktop workflows from user intent, where and why they fail, and which harness choices materially improve or degrade performance.
+The eval harness tests screenshot-based pixel-coordinate agents when the evidence (DMI: +67% success, -43.5% steps; GUIDE: +50pp intent accuracy with structured context) strongly favors accessibility-first structured-state agents. The harness already captures macOS AX trees (`macos.py:263-305`) but no adapter reads them for decision-making. Additionally, the `llm_judge` grader is stubbed out (`graders.py:27-31`), blocking the `my-test-task`, and there are no milestones for diagnosing partial progress in multi-step tasks.
 
-This is not a product build. It is a controlled learning system. Its job is to reduce unknown-unknowns around:
+### Requirements
 
-1. observation format,
-2. grounding quality,
-3. execution reliability,
-4. task specification quality,
-5. provider/runtime choice,
-6. cost and iteration speed,
-7. failure explainability.
+| # | Requirement | Priority |
+|---|---|---|
+| R1 | New `StructuredStateDesktopAdapter` reads pruned AX tree, sends to LLM, returns semantic actions resolved to coordinates | P0 |
+| R2 | AX JSON serializer with stable node IDs, bounding boxes, and interactive-element filtering alongside existing text serializer | P0 |
+| R3 | Semantic target resolution in `MacOSDesktopEnvironment` — resolve `target: "ax_001"` to pixel coordinates via AX tree | P0 |
+| R4 | `llm_judge` grader implementation — unblocks `my-test-task` and any task not verifiable by filesystem checks | P0 |
+| R5 | Task-schema validation — reject/warn on unsupported grader expressions at load time | P1 |
+| R6 | `Milestone` model and optional `milestones` field on `Task` — backward compatible | P1 |
+| R7 | Milestone verifier in runner loop — check milestones between steps, persist results | P1 |
+| R8 | Decision-point evidence persistence — save pruned AX state, focused app, milestone state, chosen action per step | P1 |
+| R9 | AX snapshots in capture pipeline alongside screenshots | P2 |
+| R10 | Model routing heuristic (cheap/frontier split based on AX tree richness) | P2 |
+| R11 | Trigger remaining failure categories (PERCEPTION, CONTEXT, ENVIRONMENT, TOOL_CHOICE) where evidence supports them | P2 |
 
-The plan must support two separate experiment families without conflating them:
+### Acceptance Criteria
 
-1. **Provider-native computer-use evals**
-   - true screenshot-to-action loops using a provider’s computer-use interface,
-   - initially OpenAI `computer-use-preview` via the Responses API.
-2. **Subscription-backed Codex evals**
-   - ChatGPT/Codex-authenticated runs using Codex as a constrained decision-maker over harness-provided state,
-   - initially browser-only and semantic-action-first,
-   - explicitly *not* treated as equivalent to provider-native computer-use.
+**AC1 — Structured-state execution:**
+Given `desktop_textedit_save` task, when `harness run tasks/desktop_textedit_save/task.yaml --adapter structured_state`, then the adapter reads AX tree, sends pruned state to LLM, executes semantic actions, and per-step evidence is saved to the run directory.
 
-### 2. Requirements
+**AC2 — Backward compatibility:**
+Given existing tasks and adapters, when run with `--adapter openai_cu` or `--adapter deterministic`, then behavior is identical to today.
 
-**P0** (must have for PoC):
+**AC3 — Comparison reporting:**
+Given runs from both `structured_state` and `openai_cu` adapters, when `harness compare`, then the report shows side-by-side success rate, step count, cost, and failure categories.
 
-1. Build a thin local harness around explicit core objects:
-   - `task`,
-   - `trial`,
-   - `trace`,
-   - `grader`,
-   - `report`.
-2. Define a minimal canonical task package as YAML plus assets.
-3. Run one deterministic browser task end to end without any paid model dependency.
-4. Persist readable run artifacts to disk so failures can be inspected after the fact.
-5. Support fast local iteration on macOS.
+**AC4 — LLM judge:**
+Given `my-test-task` (converted to `llm_judge`), when graded, then the judge produces a pass/fail verdict with explanation (not "not implemented").
 
-**P1** (must have before this is a useful experimental tool):
+**AC5 — Milestone diagnostics:**
+Given a task with milestones, when the run fails, then the trace shows which milestone was last achieved.
 
-6. Add a provider-native computer-use track using OpenAI `computer-use-preview`.
-7. Add a separate Codex subscription-backed track using ChatGPT/Codex login on a trusted local machine.
-8. Keep those tracks behind a shared harness core but report them separately.
-9. Support a small browser-first task suite with programmatic grading.
-10. Capture enough trace data to explain failures, not just score them.
+**AC6 — Task validation:**
+Given a task YAML with unsupported grader expressions, when loaded, then a warning is logged or a clear error is raised before execution.
 
-**P2** (add only if earlier milestones show signal):
+### Non-Goals
 
-11. Add richer observation modes such as screenshot plus structured browser state.
-12. Add native macOS desktop tasks.
-13. Add VM isolation if host noise becomes the binding constraint.
-14. Add evidence or recording ingestion for task authoring.
+- Deterministic skill executor / replay compiler
+- Escalation policy framework
+- Continuous video capture (ScreenCaptureKit)
+- Branch synthesis / recovery paths in tasks
+- Cross-platform environments (Windows, Linux)
+- Trained difficulty classifier for model routing
+- CUA-Skill composition DAGs
+- MCP server for AX trees
+- Full multi-agent verifier framework
+- Redesign of `Action`/`Observation` models globally
+- Replacing the existing text AX serializer
 
-### 3. Acceptance Criteria
+### Constraints
 
-- **Given** a task package and a deterministic adapter, **when** `run` is invoked, **then** the harness executes the task, writes a trace, and produces a pass/fail grade with no model dependency.
-- **Given** the same browser task under the paid computer-use track and the Codex subscription track, **when** a comparison report is generated, **then** the report clearly labels them as different experiment families and shows outcome, step count, cost or quota metadata, and failure categories for each.
-- **Given** a failed trial, **when** the trace is inspected, **then** the failure can be classified into one of:
-  - perception,
-  - planning,
-  - execution,
-  - context,
-  - environment,
-  - tool-choice,
-  - harness.
-- **Given** no API key and no Codex login, **when** the deterministic baseline runs, **then** it still validates the harness core in isolation.
-
-### 4. Non-goals
-
-1. Building the user-facing recording product.
-2. Designing a generic benchmark platform or workflow DSL.
-3. Cross-OS support beyond keeping future expansion possible.
-4. Large-scale infrastructure, hosted orchestration, or database-heavy architecture.
-5. Full factorial benchmarking across many providers and many conditions at once.
-6. Treating raw recordings as the canonical replay format.
-7. Treating Codex subscription-backed runs as apples-to-apples replacements for provider-native computer-use.
-
-### 5. Constraints
-
-1. **Greenfield repo** — only research and idea docs exist.
-2. **macOS AX coverage is incomplete** — we cannot build critical paths that depend entirely on accessibility APIs.
-3. **OpenAI `computer-use-preview` is only available via the Responses API** — it is an API-priced path, not a ChatGPT subscription path.
-4. **Codex supports ChatGPT-managed auth**, but OpenAI documents API keys as the recommended default for automation. ChatGPT-managed Codex auth for automation is an advanced workflow and should be treated as experimental and local-first.
-5. **Codex is not a provider-native computer-use model path** — it should not be used as if it were a drop-in replacement for screenshot-to-action API evals.
-6. **Eval speed matters** — we should not add framework or infrastructure overhead before the shared harness loop proves useful.
-7. **Tooling must stay swappable** until actual runs show which path is informative.
+1. **Additive over destructive.** New adapter, new serializer, new task field — don't restructure working code. Keep `openai_cu` and `deterministic` as baselines.
+2. **One model to start.** Claude Sonnet 4.6 via `anthropic` SDK. No routing until the basic path works.
+3. **Semantic targeting stays in `Action.params`.** Don't split the action schema until it proves painful.
+4. **Existing text AX serializer preserved.** JSON serializer is a parallel addition.
+5. **Existing v1 task YAMLs must keep working.** `milestones` field is optional with empty list default.
+6. **`anthropic` SDK must be added to `pyproject.toml` dependencies.**
 
 ---
 
 ## Implementation Plan
 
-### 1. Summary
+### Summary
 
-Build a thin, file-based Python harness that answers one question well:
+Build a new `StructuredStateDesktopAdapter` that reads pruned AX trees (via a new JSON serializer with stable node IDs), formats them as structured prompts for Claude Sonnet 4.6, parses semantic action responses, and resolves AX node targets to screen coordinates. This is additive — the existing adapters, protocols, environments, and task formats remain unchanged. The adapter slots into the existing `Adapter` Protocol without modifications. Milestones and `llm_judge` are separate but complementary additions that improve task expressiveness and diagnostic quality.
 
-**Given a normalized task package, can different agent setups complete a workflow reliably, and can we explain why they fail when they do not?**
+The core architectural decision: **put structured-state intelligence in the adapter, coordinate resolution in the environment, and keep the protocol layer untouched.** This matches how the codebase already separates concerns (adapter decides, environment executes) and avoids cascading changes.
 
-To minimize risk, the plan uses one shared harness core and two clearly separated live tracks:
+### Current State
 
-1. **Track A: Provider-native computer-use**
-   - browser-first,
-   - screenshot-driven,
-   - paid API,
-   - first backend: OpenAI `computer-use-preview`.
-2. **Track B: Codex subscription-backed**
-   - browser-first,
-   - structured browser state first, screenshots optional later,
-   - ChatGPT/Codex login on a trusted local machine,
-   - action space constrained to semantic browser actions.
+**Adapter → Environment flow (`runner.py:111-168`):** The runner calls `adapter.observation_request()` → `env.collect_observation()` → `adapter.decide()` → `env.execute_action()` in a loop. This loop doesn't need structural changes.
 
-The plan stays intentionally simple by making several explicit choices now:
+**AX tree capture (`macos.py:263-305`):** `_serialize_ax_element()` produces indented text with role, title, value, description. No node IDs, no bounding boxes, no filtering. `_get_ax_tree()` takes a PID and returns the text. `collect_observation()` already routes `ARIA_STATE` requests to `_get_ax_tree()` and puts the result in `Observation.aria_snapshot: str | None`.
 
-1. **Canonical artifact**
-   - the source of truth is a normalized task package, not a recording.
-2. **Storage**
-   - file-based only: YAML tasks, JSON traces, PNG screenshots when needed, Markdown reports.
-3. **Execution environment**
-   - host macOS initially, with deterministic setup and cleanup scripts.
-4. **Browser platform**
-   - Playwright for all early tasks, because it gives us both screenshots and structured browser state.
-5. **Baseline**
-   - deterministic scripted baseline before any live model path.
-6. **Live provider scope**
-   - only one paid provider-native path in the initial build: OpenAI.
-   - Anthropic is deferred unless the first comparison leaves important questions unanswered.
+**Grading (`graders.py:24-41`):** Non-programmatic methods return "not implemented." Only `file_exists`, `file_contains`, `form_submitted` are supported. `my-test-task` uses `app_opened('TextEdit') and not form_submitted(...)` — a boolean expression over unsupported functions.
 
-This is the lowest-risk path because it keeps the initial work focused on the actual unknowns rather than multiplying providers, environments, or abstractions.
+**Adapter registration (`runner.py:36-41`):** Dict mapping name to factory. Adding a new adapter is one line.
 
-### Longevity
+**Dependencies (`pyproject.toml:9-19`):** Has `openai>=1.0`, `pyobjc`, `pyautogui`. Missing `anthropic`.
 
-This harness is designed to outlive the PoC. The five core objects — task, trial, trace, grader, report — are generic enough to support any computer-use eval scenario indefinitely. Growth happens by adding new adapters, tasks, observation modes, and grading strategies, not by rebuilding the core. As long as the shared harness boundary stays stable and the adapter contract stays clean, the system can absorb new providers, new environments, and new comparison dimensions without structural changes. The PoC is the first use, not the only use.
+### Files to Change
 
-### 2. Current State
-
-The repo currently contains:
-
-1. `docs/research-consolidated.md`
-2. `docs/init-idea.md`
-3. `.plans/plan.md`
-
-There is no implementation scaffold, no package config, no tests, no task corpus, and no CLI.
-
-Implications:
-
-1. The first milestone must establish the harness core and task artifact before any provider integration.
-2. We should not start with desktop-native automation or recording ingestion.
-3. The first useful result should be a readable run directory from one deterministic browser task.
-
-### 3. Key Technical Findings
-
-These findings materially affect architecture and are strong enough to bake into the plan now.
-
-#### OpenAI computer-use
-
-1. `computer-use-preview` is a specialized model for the computer-use tool.
-2. It is only available through the Responses API.
-3. That means it is an API-priced track, not a ChatGPT subscription-backed track.
-
-Planning implication:
-
-1. If we want true provider-native OpenAI computer-use evals, we must budget for API usage.
-2. This track is still worth having because it is the cleanest test of screenshot-to-action harness behavior.
-
-#### Codex auth and automation
-
-1. Codex supports both API-key auth and ChatGPT-managed auth.
-2. OpenAI documents API keys as the recommended default for automation.
-3. ChatGPT-managed Codex auth for non-interactive use exists, but it is the advanced path and should be used only when we intentionally want account-backed execution or rate limits.
-4. Codex caches auth locally in `~/.codex/auth.json` or the OS credential store, and that credential material must be treated as sensitive.
-
-Planning implication:
-
-1. A subscription-backed Codex eval track is possible.
-2. It should be local-first and trusted-machine-only in the PoC.
-3. It should not be the only live path, because it does not test the same thing as provider-native computer-use.
-
-#### Browser observation
-
-1. Playwright provides browser screenshots.
-2. Playwright also provides structured browser state such as `ariaSnapshot()`.
-
-Planning implication:
-
-1. Browser-first is the right low-risk starting point.
-2. It gives us a clean way to support both tracks from one environment:
-   - Track A can consume screenshots,
-   - Track B can start with structured browser state and semantic actions.
-
-#### Overhead and orchestration
-
-1. A larger eval framework is not required to learn the first important lessons.
-2. We can add framework integration later if the shared harness core proves stable and useful.
-
-Planning implication:
-
-1. Do not make Inspect AI or another framework the backbone of M1-M3.
-2. Keep framework integration optional and removable.
-
-### 4. Design Principles
-
-These principles should govern implementation decisions during build-out.
-
-1. **One shared harness core, two separate live tracks**
-   - shared task loading, trial execution, grading, trace storage, and reporting,
-   - separate adapters, separate labels, separate interpretation.
-2. **Task packages are the product of the harness, not recordings**
-   - recordings are authoring evidence later, not runtime truth now.
-3. **Outcome-first grading**
-   - prefer programmatic verification over path checking or judge-based grading.
-4. **Browser-first**
-   - do not jump to native desktop until browser evals expose real gaps that desktop tasks are needed to answer.
-5. **Semantic-first for the Codex track**
-   - if the subscription-backed track starts requiring pixel-coordinate control, stop and reassess instead of silently growing a second computer-use stack.
-6. **Stop complexity before it compounds**
-   - if supporting both tracks starts slowing the shared core materially, prioritize the provider-native track and park the Codex track after the interface boundary is established.
-7. **Adapter protocol must accommodate different shapes**
-   - the three adapters have fundamentally different input/output contracts:
-     - deterministic: receives task definition → returns Playwright selector actions (no observation needed),
-     - OpenAI CU: receives screenshot bytes → returns batched pixel-coordinate actions,
-     - Codex subscription: receives serialized browser state (ARIA, URL, etc.) → returns semantic locator actions.
-   - the runner must not assume a single observation-action shape; instead, each adapter declares what observation it needs and what action format it returns,
-   - the runner collects the requested observation, hands it to the adapter, and dispatches the returned actions through the appropriate executor (pixel or semantic),
-   - keep this protocol minimal — a Python protocol class with `observation_request()` and `decide(observation) → actions` is enough; do not build an abstract base class hierarchy.
-
-### 5. Files To Create
-
-Keep the first implementation small.
-
-**Core**
-
-1. `README.md`
-2. `pyproject.toml`
-3. `.gitignore`
-4. `src/harness/__init__.py`
-5. `src/harness/types.py`
-6. `src/harness/task_loader.py`
-7. `src/harness/runner.py`
-8. `src/harness/reporting.py`
-9. `src/harness/failures.py`
-10. `src/harness/cli.py`
-
-**Environment and observations**
-
-11. `src/harness/environments/browser.py`
-12. `src/harness/observation.py`
-
-**Adapters**
-
-13. `src/harness/adapters/deterministic.py`
-14. `src/harness/adapters/openai_cu.py`
-15. `src/harness/adapters/codex_subscription.py`
-
-**Grading**
-
-16. `src/harness/graders.py`
-
-**Tasks and configs**
-
-17. `tasks/browser_download/task.yaml`
-18. `tasks/browser_download/setup.py`
-19. `tasks/browser_form_fill/task.yaml`
-20. `tasks/browser_form_fill/setup.py`
-21. `run_configs/openai_browser.yaml`
-22. `run_configs/codex_browser.yaml`
-23. `run_configs/deterministic.yaml`
-
-**Tests and docs**
-
-24. `tests/test_task_loader.py`
-25. `tests/test_graders.py`
-26. `tests/test_deterministic_smoke.py`
-27. `docs/decisions.md`
-
-**Later only if earned**
-
-28. `src/harness/environments/macos.py`
-29. `src/harness/capture.py`
-30. `src/harness/intent_extract.py`
-31. `scripts/author_task.py`
-32. `evidence/.gitkeep`
-
-### 6. Milestone Outline
-
-- [x] M1: Shared Harness Core + Deterministic Baseline
-  - [x] Step 1 — Bootstrap project (pyproject.toml, .gitignore, py.typed, src layout) → verify: `uv sync && uv run pytest --co -q`
-  - [x] Step 2 — Define core types (types.py, failures.py) with Pydantic models + adapter Protocol → verify: `uv run mypy src/harness/types.py src/harness/failures.py`
-  - [x] Step 3 — Implement task_loader.py + test_task_loader.py → verify: `uv run pytest tests/test_task_loader.py -v`
-  - [x] Step 4 — Implement graders.py + test_graders.py, create task YAML + fixtures → verify: `uv run pytest tests/test_graders.py -v`
-  - [x] Step 5 — Implement browser env, deterministic adapter, runner, reporting, CLI → verify: `uv run pytest tests/test_deterministic_smoke.py -v`
-  Commit: "feat: M1 shared harness core with deterministic browser baseline"
-
-**Goal**
-
-Prove the task package, run directory, grading contract, and reporting loop with no live provider dependency.
-
-**Exit criteria**
-
-1. `python -m harness run tasks/browser_download/task.yaml --adapter deterministic` succeeds.
-2. The run directory contains resolved task, action trace, grader output, summary report.
-3. A failing deterministic run is clearly inspectable.
-4. All six verification commands pass: uv sync, unit tests, smoke test, manual run, ruff, mypy.
-
-- [x] M2: Track A — OpenAI Provider-Native Computer-Use
-  - [x] Step 1 — Add openai dep to pyproject.toml, add metadata field to Trace → verify: `uv sync && uv run mypy src/harness/types.py`
-  - [x] Step 2 — Implement OpenAI computer-use adapter (openai_cu.py) with Responses API → verify: `uv run pytest tests/test_openai_adapter.py -v`
-  - [x] Step 3 — Register adapter in runner.py, add cost metadata extraction → verify: `uv run pytest tests/test_deterministic_smoke.py -v`
-  - [x] Step 4 — Create browser-form-fill task (fixtures, setup, grader, deterministic script) → verify: `uv run pytest tests/test_deterministic_smoke.py::test_deterministic_browser_form_fill -v`
-  - [x] Step 5 — Add comparison reporting + CLI compare command + tests → verify: `uv run pytest tests/test_comparison_report.py -v`
-  Commit: "feat: OpenAI computer-use adapter, form-fill task, comparison reporting"
-
-- [x] M3: Track B — Codex Subscription-Backed Browser Evals
-  - [x] Step 1 — Spike: verify Codex CLI returns parseable JSON from ARIA state prompt → verify: manual inspection of CLI output
-  - [x] Step 2 — Create codex_subscription adapter + register in runner → verify: `uv run mypy src/harness/adapters/codex_subscription.py`
-  - [x] Step 3 — Write unit tests (mocked subprocess) → verify: `uv run pytest tests/test_codex_adapter.py -v`
-  - [x] Step 4 — Create run_configs/codex_browser.yaml → verify: `uv run pytest -v`
-  Commit: "feat: Codex subscription adapter with ARIA-state browser evals"
-
-- [x] M4: Observation Refinement And Comparison
-  - [x] Step 1 — Add hybrid=True flag to OpenAIComputerUseAdapter + register openai_cu_hybrid in runner → verify: `uv run mypy src/harness/adapters/openai_cu.py src/harness/runner.py`
-  - [x] Step 2 — Write mocked tests for hybrid adapter behavior → verify: `uv run pytest tests/test_openai_adapter.py -v`
-  - [x] Step 3 — Add detailed metrics functions + generate_detailed_report() to reporting.py → verify: `uv run mypy src/harness/reporting.py`
-  - [x] Step 4 — Wire --detailed flag to CLI compare command → verify: `uv run mypy src/harness/cli.py`
-  - [x] Step 5 — Write tests for detailed metrics computation → verify: `uv run pytest tests/test_detailed_report.py -v`
-  Commit: "feat: hybrid OpenAI adapter variant and detailed comparison metrics"
-
-- [x] M5: Native macOS Desktop Expansion
-  - [x] Step 1 — Add pyobjc/pyautogui deps, SHELL ActionType, environment field to Task, Observation fields → verify: `uv sync && uv run mypy src/harness/types.py`
-  - [x] Step 2 — Implement MacOSDesktopEnvironment (screenshots, AX tree, actions, permissions) → verify: `uv run mypy src/harness/environments/macos.py`
-  - [x] Step 3 — Wire environment selection in runner.py based on task.environment → verify: `uv run mypy src/harness/runner.py`
-  - [x] Step 4 — Add file_contains grader, TextEdit task YAML/setup, deterministic script → verify: `uv run pytest tests/test_graders.py -v`
-  - [x] Step 5 — Write mocked tests for macOS environment, run full suite → verify: `uv run pytest -v`
-  Commit: "feat: macOS desktop environment with TextEdit task"
-
-#### M2: Track A — OpenAI Provider-Native Computer-Use
-
-**Goal**
-
-Add the first live computer-use path using OpenAI `computer-use-preview`.
-
-**Scope**
-
-1. Add the OpenAI adapter.
-2. Add screenshot capture and any required resizing or coordinate translation logic.
-3. Add hard `max_steps` and per-run cost accounting.
-4. Add one additional browser task:
-   - browser form fill.
-5. Add comparison reporting for:
-   - deterministic,
-   - OpenAI computer-use.
-
-**Default observation mode**
-
-Start with screenshot-only for Track A.
-
-Reason:
-
-1. It is the simplest true test of the provider-native computer-use path.
-2. It avoids introducing hybrid observation complexity before we have baseline signal.
-
-**OpenAI-specific implementation notes**
-
-These details affect the adapter and runner and should not be discovered mid-build:
-
-1. **Action batching**: `computer-use-preview` returns an `actions[]` array — multiple actions per turn, not one. The runner must execute all actions in sequence before taking the next screenshot. Each action in the batch is logged as a sub-step in the trace so that failures within a batch are attributable.
-2. **Server-side history**: OpenAI uses `previous_response_id` to manage conversation history server-side, unlike Anthropic which requires the full message history in each request. The adapter should store and forward this ID, not rebuild message history manually.
-3. **Safety checks**: The API may return `pending_safety_checks` requiring explicit `acknowledged_safety_checks` in the next request. For unattended eval runs, the adapter must handle this programmatically — either by acknowledging automatically (with logging) or by terminating the trial with a `harness` failure category. Decide which behavior at implementation time; do not silently swallow the check.
-4. **Screenshot resolution**: API image cap guidance should be verified against current OpenAI docs at implementation time. Coordinate scaling between Playwright viewport and the declared `display_width_px`/`display_height_px` is the harness's responsibility.
-
-**Exit criteria**
-
-1. OpenAI computer-use completes at least one real browser task end to end.
-2. Reports show:
-   - task success,
-   - steps,
-   - cost estimate,
-   - failure category.
-3. We can compare deterministic vs OpenAI on the same tasks.
-
-#### M3: Track B — Codex Subscription-Backed Browser Evals
-
-**Goal**
-
-Add a second live track that uses ChatGPT/Codex-authenticated Codex as a constrained browser-state decision-maker.
-
-**Important constraint**
-
-This is not a provider-native computer-use benchmark. It is a lower-cash-cost, harness-shaped experiment family.
-
-**Scope**
-
-1. Add a Codex subscription adapter.
-2. Require the adapter to operate on structured browser state first:
-   - ARIA snapshot,
-   - page URL and title,
-   - focused element,
-   - relevant task variables,
-   - limited screenshot reference only if clearly supported and useful.
-3. Constrain the action space to semantic browser actions such as:
-   - click locator,
-   - type into locator,
-   - press key,
-   - wait,
-   - done,
-   - fail.
-4. Add separate run configs and separate report labels for the Codex track.
-
-**Codex invocation mechanism — requires a spike**
-
-The adapter must invoke Codex using the ChatGPT subscription, not API billing. The invocation mechanism is not yet determined. Known options:
-
-1. Shell out to `codex` CLI per step with browser state serialized in the prompt. Simplest to implement, but latency per step may be high and output parsing may be fragile.
-2. Use `codex` as an MCP server (`npx codex mcp-server`) with structured tool calls. Lower latency for multi-step sessions, but adds MCP protocol complexity.
-3. Use the OpenAI API directly with a chat model and structured output schema. Cleanest interface, but this is API-billed, not subscription-backed — it would not be the Codex subscription track.
-
-**Recommendation**: Spike option 1 first (CLI invocation) because it is the simplest path to validating whether the subscription-backed track produces useful signal. If CLI latency or output parsing becomes a real problem, migrate to option 2. Do not start with option 3 — it changes the billing model and defeats the purpose of the track.
-
-**Subscription rate limit constraint**
-
-ChatGPT Plus allows 45–225 messages per 5-hour window. If each eval step is one Codex invocation and a 15-step task consumes 15 messages, then 15 trials across 2 tasks = 450 messages — potentially exceeding the window on Plus. Mitigations:
-
-1. Keep initial trial count low (3–5 per task) until message consumption is measured.
-2. Log message count per run so we can see quota pressure.
-3. If Plus quota is insufficient, document the finding and either reduce trial scope or note that Pro ($200/mo) is required for meaningful experiment volume.
-
-**Critical stop rule**
-
-If this track starts requiring bespoke screenshot-to-coordinate logic or begins to mirror a second computer-use stack, stop and keep it browser-semantic-only.
-
-**Why this comes after M2**
-
-1. The shared harness core must already exist.
-2. We need the deterministic and provider-native paths first so we have something real to compare it against.
-3. Otherwise the subscription-backed track can distort the architecture before we know whether it is informative.
-
-**Exit criteria**
-
-1. Codex subscription-backed runs can complete at least one browser task.
-2. Reports clearly separate:
-   - deterministic baseline,
-   - OpenAI computer-use,
-   - Codex subscription-backed.
-3. We can answer whether the subscription-backed track is informative enough to keep.
-
-#### M4: Observation Refinement And Comparison
-
-**Goal**
-
-Test whether additional state representation changes results enough to justify the extra complexity.
-
-**Scope**
-
-1. Add optional hybrid observation for Track A:
-   - screenshot plus structured browser state.
-2. Refine Track B prompts and state serialization.
-3. Track:
-   - step success rate,
-   - failure taxonomy,
-   - cost or quota metadata,
-   - context growth,
-   - semantic action ratio where applicable.
-
-**Decision gate**
-
-After M4, review:
-
-1. Is the OpenAI track giving useful real computer-use signal?
-2. Is the Codex subscription track giving useful lower-cost harness signal?
-3. Does hybrid observation materially help enough to keep?
-
-If one live track is clearly low value, stop investing in it.
-
-#### M5: Native macOS Desktop Expansion Only If Earned
-
-**Goal**
-
-Expand beyond browser tasks only if browser evals fail to answer the next important questions.
-
-**Scope**
-
-1. Add a native macOS environment adapter.
-2. Add AX and screenshot collection.
-3. Add 1 to 2 desktop tasks only if needed.
-4. Reassess whether VM isolation is necessary.
-
-**Default assumption**
-
-Desktop expansion should happen first for the provider-native track and deterministic baseline.
-
-Reason:
-
-1. That path is a more natural fit for screenshot-driven computer-use.
-2. The Codex subscription track should not be forced into desktop-native scope unless browser results strongly justify it.
-
-**Critical stop rule**
-
-If desktop complexity becomes high before browser learnings are exhausted, pause desktop work and keep the PoC browser-first.
-
-- [x] M6: Evidence/Recording-Ingest Prototype
-  - [x] Step 1 — Create evidence/.gitkeep, extract AX helpers from macos.py for reuse → verify: `uv run mypy src/harness/environments/macos.py`
-  - [x] Step 2 — Implement capture.py (capture_session + manifest) + test_capture.py → verify: `uv run pytest tests/test_capture.py -v`
-  - [x] Step 3 — Implement intent_extract.py (VLM extraction + YAML parse) + test_intent_extract.py → verify: `uv run pytest tests/test_intent_extract.py -v`
-  - [x] Step 4 — Add capture and author CLI commands + run full suite → verify: `uv run pytest -v && uv run ruff check src/ tests/ && uv run mypy src/`
-  Commit: "feat: evidence capture and VLM-based task authoring pipeline"
-
-- [x] M7: Input Event Capture for Evidence Pipeline
-  - [x] Step 1 — Add CGEventTap event recorder to capture.py → verify: `uv run mypy src/harness/capture.py`
-  - [x] Step 2 — Add event grouping + prompt integration to intent_extract.py → verify: `uv run mypy src/harness/intent_extract.py`
-  - [x] Step 3 — Add --no-events flag to cli.py → verify: `uv run mypy src/harness/cli.py`
-  - [x] Step 4 — Write tests for event grouping, prompt construction, manifest → verify: `uv run pytest tests/test_events.py tests/test_capture.py tests/test_intent_extract.py -v`
-  - [x] Step 5 — Full quality suite → verify: `uv run pytest -v && uv run ruff check src/ tests/ && uv run mypy src/`
-  Commit: "feat: add input event capture to evidence pipeline"
-
-#### M6: Evidence Or Recording-Ingest Prototype
-
-**Goal**
-
-Connect the eventual recording vision back to the harness without turning the project into a product build.
-
-**Scope**
-
-1. Add an `evidence/` layout for screenshots, notes, transcript snippets, and optional metadata.
-2. Add a manual or semi-assisted authoring flow that turns evidence into a task package.
-3. Keep recordings as authoring evidence, not runtime truth.
-
-**This milestone is conditional**
-
-Only do this after the eval harness is already producing useful signal.
-
-### 7. Testing Strategy
-
-Keep testing cheap, layered, and outcome-focused.
-
-| Layer | What | Runs in CI? |
+| File | Changes | Why |
 |---|---|---|
-| Schema validation | Task loading, versioning, variable substitution | Yes |
-| Deterministic smoke | End-to-end browser run with no live model | Yes |
-| Grader tests | Known inputs to expected grades | Yes |
-| Golden outputs | Deterministic trace and report snapshots | Yes |
-| Live integration | OpenAI and Codex adapters on real browser tasks | No |
-| Manual eval protocol | Reset env, run N trials, inspect, tag failures, record notes | No |
+| `src/harness/environments/macos.py` | Add `_serialize_ax_element_json()` (~80 lines), `_get_ax_tree_json()`, `_resolve_ax_target()` (~40 lines). Modify `execute_action()` to check for `target` in params and resolve to coordinates. Cache last AX tree for target resolution. | R2, R3 — JSON serializer with stable IDs and semantic target resolution |
+| `src/harness/types.py` | Add `Milestone` model (~5 lines), add `milestones: list[Milestone] = []` to `Task` (~1 line). Add `ax_contains` to `VerificationCheck.method` literal. | R6 — Milestone support in task model |
+| `src/harness/graders.py` | Implement `llm_judge` (~50 lines) using OpenAI API (already a dependency). Add `_check_app_focused()` helper. Add `_eval_bool_expr()` or convert `my-test-task` to use `llm_judge`. | R4 — LLM judge implementation |
+| `src/harness/task_loader.py` | Add validation that grader check expressions reference only supported functions. Log warning for unknown functions. | R5 — Task-schema validation |
+| `src/harness/runner.py` | Add `structured_state` to `ADAPTERS` dict. Add milestone checking between steps (~30 lines). Add evidence persistence per step (~20 lines). | R1 (registration), R7, R8 |
+| `src/harness/capture.py` | In `capture_session()`, always call `_capture_focused_app_aria()` and save to `ax_tree/` dir alongside screenshots. | R9 — AX snapshots in capture |
+| `src/harness/reporting.py` | Add milestone pass/fail data to single-run report and comparison tables. | R7 (reporting support) |
+| `pyproject.toml` | Add `anthropic>=0.40` to dependencies. | Adapter dependency |
+| `tasks/my-test-task/task.yaml` | Convert verification from boolean expression to `method: llm_judge` with a clear prompt. | R4 — Unblock broken task |
 
-Important rules:
+### Files to Create
 
-1. Do not make flaky live browser or desktop runs mandatory CI gates.
-2. CI protects harness correctness.
-3. Manual or scheduled runs answer agent-performance questions.
-
-### 8. Migration And Rollback
-
-1. Version the task package from the start.
-2. Keep run artifacts append-only under `runs/`.
-3. Do not add a database in the initial build.
-4. If an adapter proves weak, disable it by config rather than reshaping the task artifact.
-5. Keep the deterministic path permanently available.
-6. If later framework integration is added, keep it removable and outside the artifact boundary.
-
-### 9. Manual Setup Tasks
-
-These are required and should be documented explicitly.
-
-1. Install Python and `uv`.
-2. Install Playwright browser dependencies.
-3. Prepare local test fixtures and local HTTP serving for task assets.
-4. Grant macOS permissions as needed for later desktop work:
-   - accessibility,
-   - screen recording,
-   - automation.
-5. Log in to Codex with ChatGPT/Codex on the trusted local machine if the subscription-backed track is enabled.
-6. Treat `~/.codex/auth.json` or equivalent stored credentials as sensitive and never commit or share them.
-7. Decide where run artifacts live locally.
-8. Retain all artifacts initially; optimize storage only if volume becomes a real problem.
-
-### 10. Metrics
-
-**Track-agnostic metrics**
-
-1. task success rate,
-2. steps to completion,
-3. failure taxonomy distribution,
-4. repeatability across trials.
-
-**Track A metrics**
-
-1. estimated API cost per run,
-2. step success rate,
-3. screenshot-driven failure patterns,
-4. safety interruption rate if applicable.
-
-**Track B metrics**
-
-1. Codex quota or rate-limit pressure where visible,
-2. semantic action success rate,
-3. context growth from structured browser state,
-4. divergence between Codex decisions and deterministic or provider-native paths.
-
-### 11. Risks
-
-| Risk | Severity | Mitigation |
+| File | Purpose | Pattern follows |
 |---|---|---|
-| Over-engineering two live tracks at once | High | Keep one shared core, add Track B only after Track A and deterministic baseline exist |
-| Conflating Codex subscription runs with true computer-use | High | Separate labels, separate configs, separate reporting, explicit documentation |
-| API cost runaway in Track A | High | Hard `max_steps`, local fixtures, small task suite, per-run cost accounting |
-| Subscription auth fragility in Track B | Medium | Trusted local-machine only, local-first workflow, keep deterministic and API paths intact |
-| Codex subscription rate limits constrain Track B trial volume | Medium | Start with 3–5 trials per task, log message consumption, document if Plus quota is insufficient |
-| Codex invocation mechanism is unvalidated | Medium | Spike CLI invocation early in M3 before committing adapter design; keep scope small enough to pivot |
-| Task schema growing into a workflow DSL | Medium | Keep task package minimal and outcome-focused |
-| Host-environment flakiness | Medium | Deterministic setup and cleanup scripts, browser-first, defer desktop |
-| Desktop complexity arriving too early | Medium | Keep macOS-native scope behind an explicit gate after browser learnings |
-| Weak graders | Medium | Prefer programmatic verification, keep judge-based grading optional |
-| Recording ingestion distracting the project | Medium | Defer until the harness already teaches us something useful |
+| `src/harness/adapters/structured_state.py` (~300 lines) | New primary adapter. AX tree pruning, structured prompt formatting, LLM call via Anthropic SDK, semantic action parsing, response validation with retry. | `adapters/openai_cu.py` — same self-contained pattern with own API client, token tracking, cost metadata |
+| `tests/test_structured_state.py` (~200 lines) | Tests for AX pruning, prompt formatting, semantic action parsing, target resolution, coordinate validation | `tests/test_macos_env.py` — mock-based, same fixture patterns |
+| `tests/test_milestones.py` (~100 lines) | Tests for milestone model, verifier, task loading with milestones | `tests/test_graders.py` — same `_make_task()` pattern |
+| `scripts/measure_ax_coverage.py` (~50 lines) | Quick script to measure AX tree coverage for target apps (TextEdit, Chrome, Finder). Run before building full adapter. Not part of the package — standalone diagnostic. | New, standalone |
 
-### 12. Open Questions
+### Milestone Outline
 
-Only keep the questions that are still genuinely unresolved.
+#### Phase 1: Core Hypothesis
 
-1. Is the available ChatGPT/Codex subscription quota sufficient for repeated local experiments, or will the subscription-backed track need tighter trial limits?
-2. After OpenAI computer-use vs Codex subscription-backed comparisons, do we still need a second paid provider-native backend such as Anthropic?
-3. If browser-only results are already highly informative, do we want to stop there for the first PoC instead of expanding to desktop?
+- [ ] M1: AX JSON serializer — Parallel JSON serializer with stable node IDs, bounding boxes, interactive filtering, and pruning in `macos.py`. Includes timing measurement for AX capture latency. Tests for pruning logic and node ID stability.
 
-## Recommended First Build Order
+- [ ] M2: AX coverage measurement — Run `scripts/measure_ax_coverage.py` against TextEdit, Chrome, Finder. **Exit gate:** ≥3 of 3 apps must have ≥5 interactive elements with task-critical controls present. If not, stop and reassess.
 
-1. M1 shared harness core plus deterministic baseline.
-2. M2 OpenAI provider-native computer-use on browser tasks.
-3. M3 Codex subscription-backed browser evals.
-4. M4 observation refinements and comparison.
-5. M5 desktop expansion only if browser results leave important questions unanswered.
-6. M6 evidence or recording authoring only if the harness is already useful.
+- [ ] M3: Structured-state adapter — `StructuredStateDesktopAdapter` with prompt formatting, Anthropic API call, semantic action parsing with retry/fallback, and cost tracking. Semantic target resolution in `MacOSDesktopEnvironment`. Register in runner. Tests for prompt construction, response parsing, target resolution, Retina coordinate validation.
 
-## Build Discipline
+- [ ] M4: LLM judge + task fixes — Implement `llm_judge` grader. Add task-schema validation warnings. Convert `my-test-task` to `llm_judge`. Tests for judge grading path.
 
-Do not start with:
+- [ ] M5: Phase 1 exit gate — Run `desktop_textedit_save` with both `structured_state` and `openai_cu`. Compare results. Run Experiment 1 (AC1, AC2, AC3). **Decision point:** If `structured_state` fails where `openai_cu` succeeds on ≥2 tasks, investigate whether it's AX coverage (add vision fallback) or fundamental (abort AX-first approach).
 
-1. VM isolation,
-2. hosted eval tooling,
-3. native desktop automation,
-4. recording ingestion,
-5. multiple paid providers,
-6. a second screenshot-to-coordinate stack for Codex.
+#### Phase 2: Diagnostics & Optimization
 
-Start with one shared harness core, one deterministic baseline, one paid provider-native browser track, and one separate subscription-backed browser-state track. That is the smallest plan that still answers the real question.
+- [ ] M6: Milestones — Add `Milestone` model to types. Add milestone verifier to runner. Add milestone data to reports. Upgrade `desktop_textedit_save` to v2 with milestones. Tests for milestone verification.
+
+- [ ] M7: Evidence + failure categories — Persist decision-point evidence per step (pruned AX state, focused app, milestone state, action, result) to run directory. Trigger PERCEPTION, CONTEXT, ENVIRONMENT, TOOL_CHOICE failure categories where the adapter/runner has evidence to support them.
+
+- [ ] M8: Capture + routing — Add AX snapshots to capture pipeline. Add routing heuristic (cheap model for AX-rich steps, frontier for sparse/ambiguous). Run Experiments 2 and 4.
+
+### Testing Strategy
+
+**M1:** Unit tests for `_serialize_ax_element_json()` — mock AX elements, verify stable node IDs across calls, verify pruning rules (only interactive elements), verify bounding box extraction, verify max-element cap. Test AX capture timing (log if >500ms).
+
+**M3:** Unit tests for `StructuredStateDesktopAdapter` — mock Anthropic API responses, verify prompt includes pruned elements/task/history, verify semantic action parsing for all action types, verify malformed response handling (retry, fallback to FAIL). Integration test for `_resolve_ax_target()` — verify AX node ID maps to correct center coordinates. Retina coordinate test — verify AX points match pyautogui coordinate space.
+
+**M4:** Unit tests for `llm_judge` — mock OpenAI API, verify pass/fail based on model response. Test that `my-test-task` loads and grades without error. Test task-schema validation warns on `app_opened()`.
+
+**M6:** Unit tests for `Milestone` model validation. Test that v1 tasks (no milestones) still load. Test milestone verifier with programmatic checks. Test milestone data appears in report output.
+
+**M7:** Test that step evidence files are written to run directory. Test that evidence is sufficient to explain a mock failure.
+
+**All tests:** Follow existing patterns — `pytest`, mock-based for system calls, `tmp_path` for filesystem tests. Mark desktop-dependent tests with `@pytest.mark.desktop` (new marker, added to `pyproject.toml`). These need real macOS + Accessibility permissions and can't run in CI.
+
+### Manual Setup Tasks
+
+| Task | Depends on |
+|---|---|
+| Set `ANTHROPIC_API_KEY` environment variable | M3 (adapter needs it) |
+| Ensure Accessibility permission granted for Python/terminal | M1 (AX tree capture), M2 (coverage measurement) |
+| Ensure Screen Recording permission granted | M5 (end-to-end runs with screenshots for comparison) |
+
+### Risks
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| **AX trees too sparse on target apps** | Medium | High — invalidates approach | M2 measures this before building full adapter. If <3 apps have usable trees, pivot to hybrid (AX + vision) from start. |
+| **AX capture latency >1s** | Low | Medium — slows per-step loop | M1 includes timing measurement. If slow, consider caching tree across observe+resolve in same step. |
+| **Retina coordinate mismatch** | Medium | High — every click misses silently | M3 includes explicit coordinate validation test. pyautogui on macOS uses points (same as AX), but verify empirically. |
+| **LLM returns malformed JSON** | High | Medium — step fails | Adapter includes retry (up to 2 retries) with simplified prompt. Fallback to `ActionType.FAIL` with parse error. |
+| **AX tree changes after action execution** | Medium | Low — stale tree used for next step | Each step re-observes. The 0.5s `_ACTION_SETTLE_DELAY` in `macos.py:21` provides settling time. If insufficient, increase for structured_state adapter. |
+| **`anthropic` SDK version incompatibility** | Low | Low — fixable | Pin to `>=0.40` which covers current API. |
+| **`my-test-task` reveals deeper grader issues** | Medium | Low — contained | Convert to `llm_judge` directly rather than building boolean expression evaluator. If more tasks need boolean expressions, revisit then. |
+
+### Open Questions
+
+1. **Anthropic SDK version**: The adapter needs `anthropic` SDK. What minimum version to pin? Suggest `>=0.40` (current stable, supports messages API with tool use). Verify before M3.
+
+2. **LLM judge model**: The `llm_judge` grader needs a model. Use `gpt-4.1-mini` (cheapest, already have `openai` dependency) or `claude-haiku-4-5` (needs `anthropic`)? Since we're adding `anthropic` anyway, either works. Suggest `gpt-4.1-mini` for cost ($0.40/MTok input) since judge calls happen once per task, not per step.
+
+3. **AX tree in `Observation.aria_snapshot`**: The new JSON serializer produces structured data. Options: (a) serialize JSON to string, put in existing `aria_snapshot` field — adapter calls `json.loads()` on it; (b) add new `ax_state: dict | None` field. Recommend (a) — no protocol changes, adapter controls parsing. The text serializer output also goes in `aria_snapshot` today. Differentiate by checking if it starts with `{` or `[`.
+
+4. **`my-test-task` conversion strategy**: Current check is `app_opened('TextEdit') and not form_submitted('Sean', 'Flaksjdf')`. Convert to: `method: llm_judge`, `prompt: "The agent should have opened TextEdit and typed/interacted with a document, but should NOT have submitted the Zillow form. Check the final screen state."` This is simpler and more robust than building a boolean expression evaluator. Confirm this approach?
