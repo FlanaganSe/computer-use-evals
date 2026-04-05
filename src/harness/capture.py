@@ -127,13 +127,9 @@ class EventTap:
                     )
                     flags = Quartz.CGEventGetFlags(event)
                     modifiers = _extract_modifiers(flags)
-                    hotkey_mods = set(modifiers) & {"command", "control", "option"}
-                    char = (
-                        chars
-                        if actual_len > 0 and chars.isprintable() and not hotkey_mods
-                        else None
-                    )
-                    key_name = _SPECIAL_KEYS.get(keycode) if char is None else None
+                    printable = actual_len > 0 and chars.isprintable()
+                    char = chars if printable else None
+                    key_name = _SPECIAL_KEYS.get(keycode) if not printable else None
                     entry: dict[str, Any] = {
                         "t": t,
                         "type": "key",

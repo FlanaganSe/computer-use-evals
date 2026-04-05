@@ -22,20 +22,27 @@ from harness.types import Task
 logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """\
-You are analyzing a series of screenshots showing a user performing a task \
-on their computer. The screenshots are in chronological order, taken \
-{interval} seconds apart.
+You are analyzing evidence of a user performing a task on their computer. \
+Your job is to figure out exactly what they did and produce a task \
+definition that an AI agent could be evaluated against.
 
-{aria_context}\
+You have {num_screenshots} screenshots taken {interval} seconds apart.
+
 {events_context}\
+{aria_context}\
 {transcript_context}\
 
-Based on this evidence, generate a task definition in YAML format that \
-describes what the user was trying to accomplish. The task definition \
-should be machine-readable and will be used to test whether an AI agent \
-can replicate this workflow.
+IMPORTANT: Base your analysis on ALL available evidence. \
+If an input event timeline is provided, it is the ground truth for what \
+the user typed, clicked, and scrolled — do NOT guess or hallucinate \
+actions that contradict it. Use the screenshots for visual context \
+(which app is open, what UI elements are visible, spatial layout) but \
+rely on the event timeline for the actual sequence of user actions.
 
-Use this exact YAML schema:
+Do NOT invent actions, websites, or form fields that are not clearly \
+visible in the screenshots or recorded in the events.
+
+Generate a task definition in this exact YAML schema:
 
 task_id: "<short-kebab-case-id>"
 version: "1.0"
@@ -65,12 +72,14 @@ cleanup_script: null
 Guidelines:
 - The task_id should be descriptive and kebab-cased
 - Use variables for any value that might change between runs
-- The environment should be "browser" if web-based, "macos_desktop" if native apps
+- The environment should be "browser" if web-based, "macos_desktop" if native apps. \
+If the user switches between browser and native apps, use "macos_desktop".
 - Preconditions describe the starting state, not the steps
 - Verification checks the outcome, not the path taken
 - Available checks: file_exists('path'), file_contains('path', 'text'), \
 form_submitted('name', 'email')
 - If you cannot determine verification, use a descriptive comment
+- If the user typed specific text, use those exact strings as variable defaults
 
 Return ONLY the YAML. No explanation, no markdown code blocks, just raw YAML.\
 """
@@ -194,6 +203,7 @@ def build_prompt(
     aria_last: str | None = None,
     transcript: str | None = None,
     events_context: str | None = None,
+    num_screenshots: int = 0,
 ) -> str:
     """Build the extraction prompt from manifest and optional context."""
     interval = int(manifest.get("capture_interval_ms", 2000)) / 1000
@@ -219,6 +229,7 @@ def build_prompt(
 
     return EXTRACTION_PROMPT.format(
         interval=interval,
+        num_screenshots=num_screenshots,
         aria_context=aria_context,
         events_context=events_context or "",
         transcript_context=transcript_context,
@@ -282,11 +293,16 @@ def extract_intent(
         grouped = group_events(events)
         if grouped:
             events_context = (
-                "Additionally, here is a timeline of the user's input events "
-                "during the recording:\n\n" + "\n".join(grouped) + "\n\n"
+                "Here is the exact timeline of the user's keyboard, mouse, "
+                "and scroll input during the recording. This is ground truth — "
+                "these are the actual actions the user performed:\n\n"
+                + "\n".join(grouped)
+                + "\n\n"
             )
 
-    prompt_text = build_prompt(manifest, aria_first, aria_last, transcript, events_context)
+    prompt_text = build_prompt(
+        manifest, aria_first, aria_last, transcript, events_context, len(sampled)
+    )
     messages = build_messages(prompt_text, sampled)
 
     client = OpenAI()
