@@ -78,8 +78,28 @@ def generate_report(
     if task.milestones:
         lines.append("## Milestones")
         lines.append("")
+
+        # Build a lookup from milestone results on the trace
+        result_map: dict[str, tuple[bool, str]] = {}
+        for mr in trace.milestone_results:
+            result_map[mr.id] = (mr.passed, mr.explanation)
+
+        first_failed: str | None = None
         for m in task.milestones:
-            lines.append(f"- **{m.id}**: {m.description}")
+            if m.id in result_map:
+                passed, explanation = result_map[m.id]
+                icon = "PASS" if passed else "FAIL"
+                lines.append(f"- [{icon}] **{m.id}**: {m.description}")
+                if explanation:
+                    lines.append(f"  - {explanation}")
+                if not passed and first_failed is None:
+                    first_failed = m.id
+            else:
+                lines.append(f"- [--] **{m.id}**: {m.description}")
+
+        if first_failed is not None:
+            lines.append("")
+            lines.append(f"**First failure at:** {first_failed}")
         lines.append("")
 
     lines.append("## Artifacts")
@@ -94,6 +114,15 @@ def generate_report(
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _format_milestone_progress(trace: Trace) -> str:
+    """Format milestone results as a compact progress string, e.g. '2/3'."""
+    if not trace.milestone_results:
+        return "—"
+    passed = sum(1 for mr in trace.milestone_results if mr.passed)
+    total = len(trace.milestone_results)
+    return f"{passed}/{total}"
 
 
 def _format_action(action: dict[str, object]) -> str:
@@ -237,8 +266,8 @@ def generate_comparison_report(runs: list[tuple[Trace, GraderResult]]) -> str:
     lines = [
         "# Comparison Report",
         "",
-        "| Task | Adapter | Outcome | Steps | Cost | Failure |",
-        "|---|---|---|---|---|---|",
+        "| Task | Adapter | Outcome | Steps | Cost | Failure | Milestones |",
+        "|---|---|---|---|---|---|---|",
     ]
 
     for task_id in sorted(by_task.keys()):
@@ -253,9 +282,11 @@ def generate_comparison_report(runs: list[tuple[Trace, GraderResult]]) -> str:
 
             failure = trace.failure_category.value if trace.failure_category else "—"
 
+            milestones = _format_milestone_progress(trace)
+
             lines.append(
                 f"| {task_id} | {trace.adapter} | {trace.outcome} "
-                f"| {trace.total_steps} | {cost} | {failure} |"
+                f"| {trace.total_steps} | {cost} | {failure} | {milestones} |"
             )
 
     lines.append("")
@@ -339,8 +370,10 @@ def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
     for task_id in sorted(by_task.keys()):
         lines.append(f"### {task_id}")
         lines.append("")
-        lines.append("| Adapter | Outcome | Steps | Step Success | Cost | Latency (ms) |")
-        lines.append("|---|---|---|---|---|---|")
+        lines.append(
+            "| Adapter | Outcome | Steps | Step Success | Cost | Latency (ms) | Milestones |"
+        )
+        lines.append("|---|---|---|---|---|---|---|")
 
         task_runs = by_task[task_id]
         task_runs.sort(key=lambda r: r[0].adapter)
@@ -349,9 +382,10 @@ def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
             cost = (trace.metadata or {}).get("estimated_cost_usd", 0.0)
             latency = avg_latency_ms(trace)
             latency_str = f"{latency:.0f}" if latency is not None else "\u2014"
+            milestones = _format_milestone_progress(trace)
             lines.append(
                 f"| {trace.adapter} | {trace.outcome} "
-                f"| {trace.total_steps} | {ssr:.0%} | ${cost:.4f} | {latency_str} |"
+                f"| {trace.total_steps} | {ssr:.0%} | ${cost:.4f} | {latency_str} | {milestones} |"
             )
         lines.append("")
 

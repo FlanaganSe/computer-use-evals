@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 
-from harness.types import GraderResult, Task, VerificationCheck
+from harness.types import GraderResult, MilestoneResult, Task, VerificationCheck
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +246,49 @@ def _check_app_focused(expr: str) -> GraderResult:
             method="app_focused",
             explanation="Quartz not available — cannot check focused app",
         )
+
+
+# ---------------------------------------------------------------------------
+# Milestone evaluation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_milestones(task: Task, run_dir: Path) -> list[MilestoneResult]:
+    """Evaluate all milestones defined on a task.
+
+    Returns a MilestoneResult for each milestone, in definition order.
+    Milestones are evaluated independently — a later milestone can pass
+    even if an earlier one failed.
+    """
+    results: list[MilestoneResult] = []
+    for m in task.milestones:
+        result = _evaluate_single_milestone(m.check, task, run_dir)
+        results.append(
+            MilestoneResult(id=m.id, passed=result.passed, explanation=result.explanation)
+        )
+    return results
+
+
+def _evaluate_single_milestone(
+    check: VerificationCheck, task: Task, run_dir: Path
+) -> GraderResult:
+    """Evaluate a single milestone check using existing grader infrastructure."""
+    if check.method == "programmatic":
+        if check.check is None:
+            return GraderResult(
+                passed=False, method="programmatic", explanation="No check expression"
+            )
+        return _eval_check(check, run_dir)
+
+    if check.method == "llm_judge":
+        return _grade_llm_judge(check, task, run_dir)
+
+    # ax_contains and other methods — not yet implemented
+    return GraderResult(
+        passed=False,
+        method=check.method,
+        explanation=f"Milestone check method '{check.method}' not implemented yet",
+    )
 
 
 # ---------------------------------------------------------------------------

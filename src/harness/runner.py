@@ -21,7 +21,7 @@ from harness.adapters.structured_state_desktop import StructuredStateDesktopAdap
 from harness.environments.browser import BrowserEnvironment
 from harness.environments.macos import MacOSDesktopEnvironment
 from harness.failures import FailureCategory
-from harness.graders import grade
+from harness.graders import evaluate_milestones, grade
 from harness.reporting import generate_report
 from harness.task_loader import load_task
 from harness.types import (
@@ -181,6 +181,27 @@ async def _run_task_async(
             pass  # keep error status
         else:
             trace.outcome = "fail"
+
+        # Evaluate milestones if the task defines them.
+        # Wrapped in try/except so a milestone evaluation failure cannot
+        # corrupt the primary grade result or trace outcome.
+        if task.milestones:
+            try:
+                trace.milestone_results = evaluate_milestones(task, run_dir)
+            except Exception:
+                pass  # milestone_results stays [] — primary outcome unaffected
+
+            # Refine failure categorization using milestone evidence:
+            # If final grading failed but some milestones passed, we know
+            # the run progressed partially — the failure is likely in
+            # planning (chose wrong actions after a certain point) rather
+            # than a total harness or perception failure.
+            if not grader_result.passed and trace.failure_category is None:
+                passed_ids = [mr.id for mr in trace.milestone_results if mr.passed]
+                failed_ids = [mr.id for mr in trace.milestone_results if not mr.passed]
+                if passed_ids and failed_ids:
+                    # Partial progress: the agent got somewhere but didn't finish
+                    trace.failure_category = FailureCategory.PLANNING
 
     except Exception as exc:
         trace.completed_at = datetime.now(tz=UTC)

@@ -184,7 +184,7 @@ If milestone logic stays small enough, `src/harness/milestones.py` and `tests/te
 
 ### 5. Milestone Outline
 
-#### Milestone 1: Trustworthy AX Desktop Slice
+#### ~~Milestone 1: Trustworthy AX Desktop Slice~~ ✓ Complete
 
 - [x] Step 1 — AX state module: stable IDs, pruning, machine-readable serialization (`src/harness/ax_state.py` + `tests/test_ax_state.py`) → verify: `python -m pytest tests/test_ax_state.py -v`
 - [x] Step 2 — Structured-state desktop adapter + semantic target resolution in macOS env (`src/harness/adapters/structured_state_desktop.py`, extend `environments/macos.py`) → verify: `python -m pytest tests/test_structured_state_desktop.py tests/test_macos_env.py -v`
@@ -244,7 +244,13 @@ Acceptance experiments:
 - Prompt/state-shaping probe results identify one compact prompt/pruning format that is good enough to carry forward.
 - Accept Milestone 1 if the new adapter can complete or credibly attempt the anchor desktop task and the evidence artifacts are diagnostic enough to explain what happened.
 
-#### Milestone 2: Milestone-Aware Verification and Reporting
+#### ~~Milestone 2: Milestone-Aware Verification and Reporting~~ ✓ Complete
+
+- [x] Step 1 — Add `evaluate_milestones()` to `graders.py` reusing existing `_eval_check()` for programmatic checks → verify: `python -m pytest tests/test_graders.py -v`
+- [x] Step 2 — Add `milestone_results` to `Trace`, integrate evaluation into runner, persist in trace.json, refine failure categorization → verify: `python -m pytest tests/test_graders.py tests/test_task_loader.py -v`
+- [x] Step 3 — Update single-run and comparison reports to show milestone pass/fail and failure location → verify: `python -m pytest tests/test_detailed_report.py tests/test_comparison_report.py -v`
+- [x] Step 4 — Add tests covering milestone evaluation, report rendering, trace serialization, and backward compatibility → verify: `python -m pytest tests/ -v --ignore=tests/test_deterministic_smoke.py --ignore=tests/test_openai_adapter.py`
+Commit: “implement milestone-aware verification and reporting”
 
 Objective:
 

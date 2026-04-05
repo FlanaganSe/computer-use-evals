@@ -165,6 +165,7 @@ class Trace(BaseModel):
     failure_category: FailureCategory | None = None
     total_steps: int = 0
     metadata: dict[str, Any] | None = None
+    milestone_results: list[MilestoneResult] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
