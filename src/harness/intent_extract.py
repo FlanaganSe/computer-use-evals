@@ -309,7 +309,7 @@ def extract_intent(
     response = client.chat.completions.create(
         model=model,
         messages=messages,  # type: ignore[arg-type]
-        max_tokens=2000,
+        max_completion_tokens=2000,
     )
     if not response.choices:
         msg = "VLM returned no choices — possible content filter refusal"
