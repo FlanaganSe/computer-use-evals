@@ -22,6 +22,15 @@ def setup() -> dict[str, Any]:
         timeout=5,
     )
 
+    # Force TextEdit to default to plain text instead of RTF.
+    # Without this the agent must discover Cmd+Shift+T or Format → Make Plain Text,
+    # which is not what this eval is testing.
+    subprocess.run(
+        ["defaults", "write", "com.apple.TextEdit", "RichText", "-int", "0"],
+        capture_output=True,
+        timeout=5,
+    )
+
     # Clean prior test artifacts
     if TARGET_FILE.exists():
         TARGET_FILE.unlink()
@@ -37,6 +46,13 @@ def cleanup() -> None:
     # Quit TextEdit gracefully
     subprocess.run(
         ["osascript", "-e", 'tell application "TextEdit" to quit'],
+        capture_output=True,
+        timeout=5,
+    )
+
+    # Restore TextEdit RTF default so we don't leave the user's preference changed
+    subprocess.run(
+        ["defaults", "write", "com.apple.TextEdit", "RichText", "-int", "1"],
         capture_output=True,
         timeout=5,
     )

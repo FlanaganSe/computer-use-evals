@@ -90,6 +90,7 @@ def _action_signature(action: Action) -> str:
         str(p.get("y", "")),
         str(p.get("text", "")),
         str(p.get("key", "")),
+        str(p.get("intent", "")),
     ]
     return "|".join(parts)
 
@@ -134,6 +135,8 @@ def _build_step_metrics(rt_result: RuntimeResult, env: Any) -> dict[str, Any]:
         "target_found": rt_result.target_resolved,
         "state_changed": rt_result.state_changed,
     }
+    if rt_result.expected_change_observed is not None:
+        metrics["expected_change_observed"] = rt_result.expected_change_observed
     # Pull AX quality from the environment if it supports it
     if hasattr(env, "get_ax_quality"):
         ax_q = env.get_ax_quality()

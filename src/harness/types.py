@@ -62,6 +62,7 @@ class ActionType(StrEnum):
     MOVE = "move"
     SCREENSHOT = "screenshot"
     SHELL = "shell"
+    SEMANTIC_INTENT = "semantic_intent"
     DONE = "done"
     FAIL = "fail"
 

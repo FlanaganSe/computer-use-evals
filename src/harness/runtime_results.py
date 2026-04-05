@@ -145,6 +145,7 @@ def ok(
     method: ExecutionMethod = ExecutionMethod.OTHER,
     target_resolved: bool = True,
     state_changed: bool | None = None,
+    expected_change_observed: bool | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> RuntimeResult:
     """Create an OK result."""
@@ -154,6 +155,7 @@ def ok(
         execution_method=method,
         target_resolved=target_resolved,
         state_changed=state_changed,
+        expected_change_observed=expected_change_observed,
         metadata=metadata,
     )
 

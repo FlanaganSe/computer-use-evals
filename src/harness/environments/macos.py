@@ -22,7 +22,15 @@ from harness.ax_state import (
     interactive_id_set,
     prune_interactive,
 )
-from harness.runtime_results import ExecutionMethod, RuntimeResult, done, error, fail, ok
+from harness.runtime_results import (
+    ExecutionMethod,
+    ResultStatus,
+    RuntimeResult,
+    done,
+    error,
+    fail,
+    ok,
+)
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
@@ -75,6 +83,103 @@ _KEY_ALIASES: dict[str, str] = {
     "esc": "escape",
     "del": "delete",
     "bs": "backspace",
+}
+
+
+# ---------------------------------------------------------------------------
+# Semantic intent: transport builders + postcondition checkers
+# ---------------------------------------------------------------------------
+
+# Type alias for transport tuples: (method, args)
+_Transport = tuple[str, list[str]]
+
+
+def _safe_app_name(name: str) -> str:
+    """Remove characters that break AppleScript string interpolation."""
+    return name.replace('"', "").replace("\\", "").strip()
+
+
+def _save_document_transports(app_name: str) -> list[_Transport]:
+    """Ordered transports for save_document intent."""
+    transports: list[_Transport] = []
+    safe = _safe_app_name(app_name)
+    if safe:
+        transports.append(("osascript", ["-e", f'tell application "{safe}" to save document 1']))
+    transports.append(("keyboard", ["command", "s"]))
+    return transports
+
+
+def _new_document_transports(app_name: str) -> list[_Transport]:
+    """Ordered transports for new_document intent."""
+    transports: list[_Transport] = []
+    safe = _safe_app_name(app_name)
+    if safe:
+        transports.append(("osascript", ["-e", f'tell application "{safe}" to make new document']))
+    transports.append(("keyboard", ["command", "n"]))
+    return transports
+
+
+def _close_window_transports(app_name: str) -> list[_Transport]:
+    """Ordered transports for close_window intent."""
+    transports: list[_Transport] = []
+    safe = _safe_app_name(app_name)
+    if safe:
+        transports.append(
+            ("osascript", ["-e", f'tell application "{safe}" to close front window'])
+        )
+    transports.append(("keyboard", ["command", "w"]))
+    return transports
+
+
+def _check_save_postcondition(
+    pre_title: str | None, post_title: str | None, state_changed: bool | None
+) -> bool | None:
+    """Check if save_document had the expected effect.
+
+    Strong signal: window title changed (e.g., lost "Edited" flag, gained filename).
+    Weaker signal: AX state changed (dialog appeared, tree restructured).
+    """
+    if pre_title and post_title and pre_title != post_title:
+        return True
+    if state_changed is True:
+        return True
+    return None
+
+
+def _check_new_document_postcondition(
+    pre_title: str | None, post_title: str | None, state_changed: bool | None
+) -> bool | None:
+    """Check if new_document created a new editable document."""
+    if post_title and "untitled" in post_title.lower():
+        return True
+    if pre_title != post_title and state_changed is True:
+        return True
+    if state_changed is True:
+        return True
+    return None
+
+
+def _check_close_window_postcondition(
+    pre_title: str | None, post_title: str | None, state_changed: bool | None
+) -> bool | None:
+    """Check if close_window closed or dismissed the front window."""
+    if pre_title and not post_title:
+        return True
+    if pre_title and post_title and pre_title != post_title:
+        return True
+    if state_changed is True:
+        return True
+    return None
+
+
+# Registry: intent name → (transport builder, postcondition checker)
+_PostconditionFn = type(_check_save_postcondition)
+_TransportFn = type(_save_document_transports)
+
+_INTENT_REGISTRY: dict[str, tuple[_TransportFn, _PostconditionFn]] = {
+    "save_document": (_save_document_transports, _check_save_postcondition),
+    "new_document": (_new_document_transports, _check_new_document_postcondition),
+    "close_window": (_close_window_transports, _check_close_window_postcondition),
 }
 
 
@@ -458,6 +563,9 @@ class MacOSDesktopEnvironment:
                     await asyncio.sleep(_READINESS_MIN_WAIT)
                 return ok(method=ExecutionMethod.SHELL)
 
+            case ActionType.SEMANTIC_INTENT:
+                return await self._execute_semantic_intent(action)
+
             case ActionType.MOVE:
                 if "x" in params and "y" in params:
                     pyautogui.moveTo(int(params["x"]), int(params["y"]))
@@ -498,6 +606,88 @@ class MacOSDesktopEnvironment:
         except Exception:
             logger.debug("AXPress exception for %s", target_id, exc_info=True)
         return False
+
+    async def _execute_semantic_intent(self, action: Action) -> RuntimeResult:
+        """Execute a semantic intent with deterministic transport and postcondition check.
+
+        Tries transports in order. After each attempt, runs an intent-specific
+        postcondition check. If postcondition clearly fails, tries the next
+        transport. If all transports are exhausted, returns error.
+        """
+        import pyautogui  # type: ignore[import-untyped]
+
+        intent = action.params.get("intent", "")
+        registry_entry = _INTENT_REGISTRY.get(intent)
+        if registry_entry is None:
+            return error(f"Unknown semantic intent: {intent}")
+
+        transport_fn, postcondition_fn = registry_entry
+
+        # Capture pre-action window context for postcondition comparison
+        pre_info = _get_window_info()
+        app_name = pre_info.get("focused_app", "")
+        pre_title = pre_info.get("focused_window_title")
+
+        transports = transport_fn(app_name)
+
+        for method, args in transports:
+            pre_ids = self._capture_pre_state()
+            transport_ok = False
+
+            if method == "osascript":
+                try:
+                    proc = subprocess.run(
+                        ["osascript", *args],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    transport_ok = proc.returncode == 0
+                except (subprocess.TimeoutExpired, OSError):
+                    transport_ok = False
+                if not transport_ok:
+                    logger.debug("osascript transport failed for intent %s, trying next", intent)
+                    continue
+            elif method == "keyboard":
+                try:
+                    pyautogui.hotkey(*args)
+                    transport_ok = True
+                except Exception:
+                    logger.debug("keyboard transport failed for intent %s", intent, exc_info=True)
+                    continue
+
+            state_changed = await self._wait_for_readiness(pre_ids)
+
+            # Postcondition check
+            post_info = _get_window_info()
+            post_title = post_info.get("focused_window_title")
+            postcondition_met = postcondition_fn(pre_title, post_title, state_changed)
+
+            exec_method = (
+                ExecutionMethod.SHELL if method == "osascript" else ExecutionMethod.KEYBOARD
+            )
+
+            if postcondition_met is not False:
+                # Success or uncertain — accept this transport
+                return ok(
+                    method=exec_method,
+                    state_changed=state_changed,
+                    expected_change_observed=postcondition_met,
+                    metadata={"intent": intent, "transport": method},
+                )
+
+            # Postcondition clearly failed — try next transport
+            logger.debug(
+                "Postcondition failed for %s via %s, trying next transport",
+                intent,
+                method,
+            )
+
+        # All transports exhausted
+        return error(
+            f"semantic intent '{intent}': all transports failed postconditions",
+            method=ExecutionMethod.OTHER,
+        )
 
     @staticmethod
     def _is_app_switch_command(command: str, args: list[str]) -> bool:

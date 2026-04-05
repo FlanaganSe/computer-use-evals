@@ -41,6 +41,11 @@ _MAX_HISTORY = 5
 
 # ActionType mapping from semantic action strings
 _SEMANTIC_ACTION_MAP: dict[str, ActionType] = {
+    # Semantic intents — runtime resolves transport deterministically
+    "save_document": ActionType.SEMANTIC_INTENT,
+    "new_document": ActionType.SEMANTIC_INTENT,
+    "close_window": ActionType.SEMANTIC_INTENT,
+    # Direct actions
     "click": ActionType.CLICK,
     "double_click": ActionType.DOUBLE_CLICK,
     "type_text": ActionType.TYPE,
@@ -310,9 +315,15 @@ class StructuredStateDesktopAdapter:
         parts.append("")
         parts.append(
             "Return a single JSON action. "
-            'Fields: "action" (one of: click, double_click, type_text, press_keys, '
-            "scroll, select_menu_item, set_value, open_app, focus_window, wait_for, done, fail), "
-            '"target" (element ID like ax_abc12345, or null), '
+            'Fields: "action" (one of: '
+            "save_document, new_document, close_window "
+            "[PREFERRED — use these for standard document/window operations; "
+            "the runtime resolves the correct shortcut/transport], "
+            "click, double_click, type_text, scroll, "
+            "select_menu_item, set_value, open_app, focus_window, wait_for, "
+            "press_keys [escape hatch — only when no semantic action fits], "
+            "done, fail), "
+            '"target" (element ID like ax_abc12345, or null for semantic intents), '
             '"value" (text to type or menu item, or null), '
             '"fallback_x" and "fallback_y" (pixel coordinates if target unresolvable, or null), '
             '"expected_change" (what should happen, or null).'
@@ -406,6 +417,14 @@ class StructuredStateDesktopAdapter:
                     params={"reason": value or "Agent declared failure"},
                 )
             ]
+
+        # Semantic intents — no target resolution needed; environment resolves transport
+        if action_type == ActionType.SEMANTIC_INTENT:
+            intent_params: dict[str, Any] = {"intent": action_name}
+            expected = semantic.get("expected_change")
+            if expected:
+                intent_params["expected_change"] = expected
+            return [Action(action_type=ActionType.SEMANTIC_INTENT, params=intent_params)]
 
         params: dict[str, Any] = {}
 
@@ -520,6 +539,14 @@ class StructuredStateDesktopAdapter:
             if action_type == ActionType.FAIL:
                 params["reason"] = semantic.get("value", "Agent declared failure")
             return [Action(action_type=action_type, params=params)]
+
+        # Semantic intents work without a structured tree
+        if action_type == ActionType.SEMANTIC_INTENT:
+            intent_params: dict[str, Any] = {"intent": action_name}
+            expected = semantic.get("expected_change")
+            if expected:
+                intent_params["expected_change"] = expected
+            return [Action(action_type=ActionType.SEMANTIC_INTENT, params=intent_params)]
 
         params = {}
         fx = semantic.get("fallback_x")
