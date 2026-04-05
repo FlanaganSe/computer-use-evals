@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """\
 You are analyzing evidence of a user performing a task on their computer. \
-Your job is to figure out exactly what they did and produce a task \
-definition that an AI agent could be evaluated against.
+Your job is to reconstruct exactly what they did — step by step — and \
+produce a task definition that an AI agent could be evaluated against.
 
 You have {num_screenshots} screenshots taken {interval} seconds apart.
 
@@ -32,15 +32,20 @@ You have {num_screenshots} screenshots taken {interval} seconds apart.
 {aria_context}\
 {transcript_context}\
 
-IMPORTANT: Base your analysis on ALL available evidence. \
-If an input event timeline is provided, it is the ground truth for what \
-the user typed, clicked, and scrolled — do NOT guess or hallucinate \
-actions that contradict it. Use the screenshots for visual context \
-(which app is open, what UI elements are visible, spatial layout) but \
-rely on the event timeline for the actual sequence of user actions.
-
-Do NOT invent actions, websites, or form fields that are not clearly \
-visible in the screenshots or recorded in the events.
+CRITICAL INSTRUCTIONS:
+1. The input event timeline (if provided) is GROUND TRUTH. It records \
+every click, keystroke, and scroll the user actually performed. Do NOT \
+guess or hallucinate actions — only describe what the events show.
+2. Use screenshots for visual context (which app is open, what UI \
+elements are visible) but the events tell you WHAT HAPPENED.
+3. The user may have performed a MULTI-STEP workflow spanning multiple \
+applications. Account for EVERY phase of the workflow. If the user \
+started in a browser, then switched to a native app, describe both parts.
+4. If the user did NOT submit a form or complete an action, do NOT claim \
+they did. Only describe actions that are evidenced by the events.
+5. The goal description must be a DETAILED step-by-step description of \
+the entire workflow, not a one-line summary. Each distinct phase should \
+be mentioned.
 
 Generate a task definition in this exact YAML schema:
 
@@ -49,12 +54,19 @@ version: "1.0"
 environment: "<browser or macos_desktop>"
 
 goal:
-  description: "<Clear description of what to accomplish. \
-Use {{{{variable}}}} placeholders for values that should be parameterizable.>"
+  description: |
+    <Detailed step-by-step description of the full workflow.
+    Each step on its own line. Use {{{{variable}}}} placeholders
+    for values that should be parameterizable. Example:
+    1. Open {{{{url}}}} in the browser.
+    2. Fill in the name field with '{{{{name}}}}'.
+    3. Copy the form data.
+    4. Open TextEdit and paste the copied data.
+    5. Save the file as '{{{{filename}}}}'.>
   variables:
     <variable_name>:
       type: "<url|string|path>"
-      default: "<default value>"
+      default: "<default value from what the user actually typed>"
 
 preconditions:
   - "<What must be true before starting>"
@@ -70,16 +82,16 @@ or form_submitted('name', 'email')>"
 cleanup_script: null
 
 Guidelines:
-- The task_id should be descriptive and kebab-cased
-- Use variables for any value that might change between runs
-- The environment should be "browser" if web-based, "macos_desktop" if native apps. \
-If the user switches between browser and native apps, use "macos_desktop".
-- Preconditions describe the starting state, not the steps
-- Verification checks the outcome, not the path taken
-- Available checks: file_exists('path'), file_contains('path', 'text'), \
-form_submitted('name', 'email')
-- If you cannot determine verification, use a descriptive comment
-- If the user typed specific text, use those exact strings as variable defaults
+- task_id: descriptive, kebab-cased
+- environment: "browser" if web-only, "macos_desktop" if native apps \
+are involved (including cross-app workflows)
+- Variables: use the exact text the user typed as defaults
+- Preconditions: the starting state, not the steps
+- Verification: check the final outcome. Use file_contains if the user \
+saved a file with specific content. Use file_exists if they created a file. \
+Use form_submitted only if they actually submitted a form.
+- If the user copied text and pasted it into a file, verification should \
+check that the file contains the pasted text
 
 Return ONLY the YAML. No explanation, no markdown code blocks, just raw YAML.\
 """
