@@ -91,6 +91,7 @@ class TaskVariable(BaseModel):
 
 class TaskGoal(BaseModel):
     description: str
+    agent_brief: str | None = None
     variables: dict[str, TaskVariable] = Field(default_factory=dict)
 
 

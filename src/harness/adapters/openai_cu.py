@@ -184,7 +184,7 @@ class OpenAIComputerUseAdapter:
         if self._previous_response_id is None:
             # First call: send task description + optional ARIA + screenshot
             content: list[dict[str, Any]] = [
-                {"type": "input_text", "text": task.goal.description},
+                {"type": "input_text", "text": task.goal.agent_brief or task.goal.description},
             ]
             if aria_text:
                 content.append(

@@ -292,7 +292,7 @@ class StructuredStateDesktopAdapter:
         elements_text: str,
     ) -> str:
         parts = [
-            f"TASK: {task.goal.description}",
+            f"TASK: {task.goal.agent_brief or task.goal.description}",
             "",
             f"FOCUSED APP: {focused_app}",
             f"FOCUSED WINDOW: {window_title}",

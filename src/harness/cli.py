@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from harness.capture import capture_session
+from harness.compiler import CompileError, compile_draft_file
 from harness.intent_extract import author_task, group_events, load_events
 from harness.reporting import collect_runs, generate_comparison_report, generate_detailed_report
 from harness.runner import run_task
@@ -54,9 +55,25 @@ def main(argv: list[str] | None = None) -> None:
 
     author_parser = subparsers.add_parser("author", help="Generate draft task from evidence")
     author_parser.add_argument("evidence_dir", help="Path to evidence directory")
-    author_parser.add_argument("--output", required=True, help="Output task YAML path")
+    author_parser.add_argument("--output", required=True, help="Output draft YAML path")
     author_parser.add_argument("--model", default="gpt-5.4", help="VLM model to use")
     author_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+
+    compile_parser = subparsers.add_parser(
+        "compile", help="Compile a draft task into a validated runtime task"
+    )
+    compile_parser.add_argument("draft", help="Path to draft YAML file")
+    compile_parser.add_argument("--output", default=None, help="Output compiled task YAML path")
+    compile_parser.add_argument(
+        "--task-dir",
+        default=None,
+        help="Project root for resolving script paths (default: current directory)",
+    )
+    compile_parser.add_argument(
+        "--no-validate-scripts",
+        action="store_true",
+        help="Skip checking that referenced scripts exist on disk",
+    )
 
     args = parser.parse_args(argv)
 
@@ -123,5 +140,25 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(yaml_text)
         if not args.dry_run:
-            print(f"\nDraft task written to {args.output}")
-            print("Review and edit before running through the harness.")
+            print(f"\nDraft written to {args.output}")
+            print("Review and edit, then run: harness compile " + args.output)
+
+    elif args.command == "compile":
+        draft_path = Path(args.draft)
+        output_path = Path(args.output) if args.output else None
+        task_dir = Path(args.task_dir) if args.task_dir else Path.cwd()
+        validate_scripts = not args.no_validate_scripts
+        try:
+            task = compile_draft_file(
+                draft_path,
+                output_path=output_path,
+                task_dir=task_dir,
+                validate_scripts=validate_scripts,
+            )
+            final_path = output_path or (draft_path.parent / "task.yaml")
+            print(f"Compiled task '{task.task_id}' written to {final_path}")
+        except CompileError as exc:
+            print(f"Compile failed with {len(exc.errors)} error(s):", file=sys.stderr)
+            for err in exc.errors:
+                print(f"  - {err}", file=sys.stderr)
+            sys.exit(1)

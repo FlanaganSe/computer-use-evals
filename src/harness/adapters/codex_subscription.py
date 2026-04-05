@@ -130,7 +130,7 @@ class CodexSubscriptionAdapter:
         return (
             "You are a browser automation agent. You read the accessibility "
             "tree of a web page and decide what action to take next.\n\n"
-            f"Task: {task.goal.description}\n\n"
+            f"Task: {task.goal.agent_brief or task.goal.description}\n\n"
             f"Page URL: {observation.url}\n"
             f"Page title: {observation.page_title}\n\n"
             f"Accessibility tree:\n{observation.aria_snapshot}\n\n"

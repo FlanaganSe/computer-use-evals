@@ -254,7 +254,15 @@ Exit criteria:
 - action success is no longer determined solely by AXPress return codes
 - reports can show whether a failure was caused by poor AX quality, no state change, or later planning failure
 
-#### Milestone 4: Split authoring from compilation
+#### ~~Milestone 4: Split authoring from compilation~~ ✓ COMPLETE (2026-04-05)
+
+- [x] Step 1 — Add `agent_brief` to `TaskGoal`; create `DraftTask` and `CompileMetadata` models in `compiler.py` → verify: `uv run pytest tests/test_compiler.py -q`
+- [x] Step 2 — Implement `compile_draft()` and `compile_draft_file()` with compile-time validation (check expressions, variable refs, script paths) → verify: `uv run pytest tests/test_compiler.py -q` (36 passed)
+- [x] Step 3 — Update `author_task()` to emit `DraftTask` with `compile_metadata`; update extraction prompt for `agent_brief` → verify: `uv run pytest tests/test_intent_extract.py -q` (37 passed)
+- [x] Step 4 — Add `harness compile` CLI command; add CLI compile tests → verify: `uv run pytest tests/test_cli_compile.py -q` (10 passed)
+- [x] Step 5 — Update adapters to prefer `agent_brief` over `description` → verify: `uv run pytest -q`
+- [x] Step 6 — Full gate: ruff + mypy + pytest → verify: 460 passed, mypy clean, ruff clean
+Commit: "split authoring from compilation with draft→compile pipeline"
 
 Scope:
 

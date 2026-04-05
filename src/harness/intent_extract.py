@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 from openai import OpenAI
 
-from harness.types import Task
+from harness.compiler import CompileMetadata, DraftTask
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ environment: "<browser or macos_desktop>"
 
 goal:
   description: |
-    <Detailed step-by-step description of the full workflow.
+    <Detailed step-by-step description of the full workflow for human review.
     Each step on its own line. Use {{{{variable}}}} placeholders
     for values that should be parameterizable. Example:
     1. Open {{{{url}}}} in the browser.
@@ -63,6 +63,11 @@ goal:
     3. Copy the form data.
     4. Open TextEdit and paste the copied data.
     5. Save the file as '{{{{filename}}}}'.>
+  agent_brief: |
+    <Concise, action-oriented instruction for the AI agent executing this task.
+    Focus on WHAT to do, not background context. Example:
+    Open {{{{url}}}}, fill name='{{{{name}}}}', copy form data,
+    paste into TextEdit, save as '{{{{filename}}}}'.>
   variables:
     <variable_name>:
       type: "<url|string|path>"
@@ -392,14 +397,14 @@ def extract_intent(
     return response.choices[0].message.content or ""
 
 
-def parse_draft_task(raw_yaml: str) -> Task:
-    """Parse VLM output into a Task model. Raises on validation error."""
+def parse_draft_task(raw_yaml: str) -> DraftTask:
+    """Parse VLM output into a DraftTask model. Raises on validation error."""
     cleaned = raw_yaml.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"```(?:yaml)?\s*\n?", "", cleaned)
         cleaned = cleaned.rstrip("`").strip()
     data = yaml.safe_load(cleaned)
-    return Task.model_validate(data)
+    return DraftTask.model_validate(data)
 
 
 def author_task(
@@ -408,21 +413,33 @@ def author_task(
     model: str = "gpt-5.4",
     dry_run: bool = False,
 ) -> str:
-    """Full authoring pipeline: extract intent, parse, write YAML.
+    """Full authoring pipeline: extract intent, parse, write draft YAML.
 
-    Returns the raw YAML text (written to output_path unless dry_run).
+    Produces a **draft** artifact (not a trusted runtime task).  Run
+    ``harness compile`` on the output to validate and produce the final
+    runnable ``task.yaml``.
+
+    Returns the draft YAML text (written to output_path unless dry_run).
     """
+    from datetime import UTC, datetime
+
     raw_yaml = extract_intent(evidence_dir, model=model)
 
     try:
-        task = parse_draft_task(raw_yaml)
+        draft = parse_draft_task(raw_yaml)
+        # Attach compile metadata for provenance
+        draft.compile_metadata = CompileMetadata(
+            source_evidence=str(evidence_dir),
+            authoring_model=model,
+            authored_at=datetime.now(tz=UTC).isoformat(),
+        )
         final_yaml = yaml.dump(
-            task.model_dump(by_alias=True, exclude_none=True),
+            draft.model_dump(by_alias=True, exclude_none=True),
             default_flow_style=False,
             sort_keys=False,
         )
     except Exception:
-        logger.warning("VLM output did not validate against Task schema, saving raw output")
+        logger.warning("VLM output did not validate against draft schema, saving raw output")
         final_yaml = raw_yaml
         if not dry_run:
             raw_path = output_path.with_suffix(".yaml.raw")
@@ -432,6 +449,6 @@ def author_task(
     if not dry_run:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(final_yaml)
-        logger.info("Draft task written to %s", output_path)
+        logger.info("Draft written to %s", output_path)
 
     return final_yaml
