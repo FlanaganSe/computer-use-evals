@@ -314,7 +314,13 @@ Acceptance experiments:
 - Compare task drafting quality on a small set of recordings with and without AX context.
 - Accept if AX context yields noticeably better task descriptions or variable extraction on at least two recordings.
 
-#### Milestone 4: Comparison Runs and Cheap-First Routing
+#### ~~Milestone 4: Comparison Runs and Cheap-First Routing~~ ✓ Complete
+
+- [x] Step 1 — Add cheap-first routing to structured-state adapter: routing heuristic (sparse tree / post-failure → strong model, otherwise → cheap model), model-per-call tracking, routing metadata in cost output, parse-failure escalation → verify: `python -m pytest tests/test_structured_state_desktop.py -v`
+- [x] Step 2 — Register `structured_state_desktop_routed` in runner ADAPTERS via lambda factory; add run configs for baseline, routed, and comparison desktop suites → verify: `python -c "from harness.runner import ADAPTERS; assert 'structured_state_desktop_routed' in ADAPTERS"`
+- [x] Step 3 — Add "Structured-State Experiment" section to `generate_detailed_report()` surfacing routing metadata (cheap_steps, strong_steps, escalations) → verify: `python -m pytest tests/test_detailed_report.py -v`
+- [x] Step 4 — Add tests: routing heuristic selection, routed adapter registration/factory, structured-state experiment report section, routing metadata in evidence → verify: `python -m pytest tests/test_structured_state_desktop.py tests/test_detailed_report.py tests/test_comparison_report.py -v`
+Commit: "add routed comparisons for structured-state desktop evals"
 
 Objective:
 

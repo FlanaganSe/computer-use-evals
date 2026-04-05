@@ -40,6 +40,7 @@ ADAPTERS: dict[str, _AdapterFactory] = {
     "openai_cu_hybrid": lambda: OpenAIComputerUseAdapter(hybrid=True),
     "codex_subscription": CodexSubscriptionAdapter,
     "structured_state_desktop": StructuredStateDesktopAdapter,
+    "structured_state_desktop_routed": lambda: StructuredStateDesktopAdapter(routing_enabled=True),
 }
 
 ENVIRONMENTS: dict[str, type] = {

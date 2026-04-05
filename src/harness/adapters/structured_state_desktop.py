@@ -19,13 +19,21 @@ from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
 
-# Default model for structured-state planning.
+# Default models for structured-state planning.
 # Using OpenAI to avoid a new dependency; the adapter is model-agnostic.
 _DEFAULT_MODEL = "gpt-4.1"
+_DEFAULT_CHEAP_MODEL = "gpt-4.1-mini"
 
 # Pricing per 1M tokens (April 2026)
-_INPUT_PRICE_PER_M = 2.00
-_OUTPUT_PRICE_PER_M = 8.00
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+}
+_DEFAULT_INPUT_PRICE = 2.00
+_DEFAULT_OUTPUT_PRICE = 8.00
+
+# Routing thresholds
+_SPARSE_TREE_THRESHOLD = 3  # escalate if fewer interactive elements than this
 
 # Maximum recent actions to include in prompt context.
 _MAX_HISTORY = 5
@@ -74,6 +82,8 @@ class StructuredStateDesktopAdapter:
         self,
         *,
         model: str | None = None,
+        cheap_model: str | None = None,
+        routing_enabled: bool = False,
     ) -> None:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
@@ -82,14 +92,23 @@ class StructuredStateDesktopAdapter:
 
         self._client = OpenAI(api_key=api_key)
         self._model = model or _DEFAULT_MODEL
+        self._cheap_model = cheap_model or _DEFAULT_CHEAP_MODEL
+        self._routing_enabled = routing_enabled
         self._action_history: list[dict[str, str]] = []
         self._input_tokens: int = 0
         self._output_tokens: int = 0
         self._api_calls: int = 0
         self._step_evidence: list[dict[str, Any]] = []
+        # Routing tracking
+        self._cheap_steps: int = 0
+        self._strong_steps: int = 0
+        self._escalations: int = 0
+        self._last_step_failed: bool = False
 
     @property
     def name(self) -> str:
+        if self._routing_enabled:
+            return "structured_state_desktop_routed"
         return "structured_state_desktop"
 
     def observation_request(self) -> ObservationType:
@@ -120,11 +139,31 @@ class StructuredStateDesktopAdapter:
             elements_text=elements_text,
         )
 
-        response = self._call_llm(prompt)
+        # Choose model tier via routing heuristic
+        model_used = self._route_model(len(interactive))
+        response = self._call_llm(prompt, model=model_used)
         semantic = self._parse_response(response)
 
+        # If routing produced a parse failure on cheap model, retry with strong
+        if (
+            self._routing_enabled
+            and model_used == self._cheap_model
+            and semantic.get("action") == "fail"
+            and "Unparseable" in semantic.get("value", "")
+        ):
+            # Reclassify this step: undo the cheap count, add a strong count
+            self._cheap_steps -= 1
+            self._strong_steps += 1
+            self._escalations += 1
+            model_used = self._model
+            response = self._call_llm(prompt, model=model_used)
+            semantic = self._parse_response(response)
+
+        # Track whether this step resulted in a fail action (for next-step routing)
+        self._last_step_failed = semantic.get("action") == "fail"
+
         # Record evidence for this decision
-        evidence = {
+        evidence: dict[str, Any] = {
             "focused_app": observation.focused_app,
             "window_title": observation.page_title,
             "interactive_count": len(interactive),
@@ -132,6 +171,9 @@ class StructuredStateDesktopAdapter:
             "raw_response": response[:500],
             "parsed_action": semantic,
         }
+        if self._routing_enabled:
+            evidence["model_used"] = model_used
+            evidence["routing_tier"] = "cheap" if model_used == self._cheap_model else "strong"
         self._step_evidence.append(evidence)
 
         actions = self._semantic_to_actions(semantic, ax_tree)
@@ -157,9 +199,13 @@ class StructuredStateDesktopAdapter:
         self._output_tokens = 0
         self._api_calls = 0
         self._step_evidence = []
+        self._cheap_steps = 0
+        self._strong_steps = 0
+        self._escalations = 0
+        self._last_step_failed = False
 
     def get_cost_metadata(self) -> dict[str, Any]:
-        return {
+        meta: dict[str, Any] = {
             "input_tokens": self._input_tokens,
             "output_tokens": self._output_tokens,
             "total_tokens": self._input_tokens + self._output_tokens,
@@ -167,6 +213,13 @@ class StructuredStateDesktopAdapter:
             "model": self._model,
             "api_calls": self._api_calls,
         }
+        if self._routing_enabled:
+            meta["routing_enabled"] = True
+            meta["cheap_model"] = self._cheap_model
+            meta["cheap_steps"] = self._cheap_steps
+            meta["strong_steps"] = self._strong_steps
+            meta["escalations"] = self._escalations
+        return meta
 
     def get_step_evidence(self) -> list[dict[str, Any]]:
         """Return decision-point evidence collected during the run."""
@@ -177,9 +230,51 @@ class StructuredStateDesktopAdapter:
     # ------------------------------------------------------------------
 
     def _estimate_cost(self) -> float:
-        return (self._input_tokens / 1_000_000) * _INPUT_PRICE_PER_M + (
+        if self._routing_enabled and (self._cheap_steps + self._strong_steps) > 0:
+            total_steps = self._cheap_steps + self._strong_steps
+            cheap_frac = self._cheap_steps / total_steps
+            strong_frac = self._strong_steps / total_steps
+            cheap_pricing = _MODEL_PRICING.get(
+                self._cheap_model, (_DEFAULT_INPUT_PRICE, _DEFAULT_OUTPUT_PRICE)
+            )
+            strong_pricing = _MODEL_PRICING.get(
+                self._model, (_DEFAULT_INPUT_PRICE, _DEFAULT_OUTPUT_PRICE)
+            )
+            blended_input = cheap_frac * cheap_pricing[0] + strong_frac * strong_pricing[0]
+            blended_output = cheap_frac * cheap_pricing[1] + strong_frac * strong_pricing[1]
+            return (self._input_tokens / 1_000_000) * blended_input + (
+                self._output_tokens / 1_000_000
+            ) * blended_output
+
+        pricing = _MODEL_PRICING.get(self._model, (_DEFAULT_INPUT_PRICE, _DEFAULT_OUTPUT_PRICE))
+        return (self._input_tokens / 1_000_000) * pricing[0] + (
             self._output_tokens / 1_000_000
-        ) * _OUTPUT_PRICE_PER_M
+        ) * pricing[1]
+
+    def _route_model(self, interactive_count: int) -> str:
+        """Choose cheap or strong model based on routing heuristic.
+
+        Escalation triggers:
+        - AX tree is sparse (fewer than _SPARSE_TREE_THRESHOLD interactive elements)
+        - Previous step resulted in a fail action
+        - Routing is disabled (always use strong model)
+        """
+        if not self._routing_enabled:
+            return self._model
+
+        # Escalate to strong model on sparse tree or post-failure
+        if interactive_count < _SPARSE_TREE_THRESHOLD:
+            self._strong_steps += 1
+            self._escalations += 1
+            return self._model
+
+        if self._last_step_failed:
+            self._strong_steps += 1
+            self._escalations += 1
+            return self._model
+
+        self._cheap_steps += 1
+        return self._cheap_model
 
     def _build_prompt(
         self,
@@ -220,11 +315,12 @@ class StructuredStateDesktopAdapter:
 
         return "\n".join(parts)
 
-    def _call_llm(self, prompt: str) -> str:
+    def _call_llm(self, prompt: str, *, model: str | None = None) -> str:
         """Call the LLM with the structured prompt. Returns raw text response."""
+        use_model = model or self._model
         try:
             response = self._client.chat.completions.create(
-                model=self._model,
+                model=use_model,
                 messages=[
                     {
                         "role": "system",
@@ -380,6 +476,9 @@ class StructuredStateDesktopAdapter:
 
         response = self._call_llm(prompt)
         semantic = self._parse_response(response)
+
+        # Track failure state for routing (same as structured path)
+        self._last_step_failed = semantic.get("action") == "fail"
 
         evidence = {
             "focused_app": observation.focused_app,

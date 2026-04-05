@@ -444,6 +444,35 @@ def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
             )
         lines.append("")
 
+    # --- Structured-state experiment (if structured-state runs exist) ---
+    ss_runs = [
+        r
+        for r in runs
+        if r[0].adapter in ("structured_state_desktop", "structured_state_desktop_routed")
+    ]
+    if ss_runs:
+        lines.append("## Structured-State Experiment")
+        lines.append("")
+        lines.append(
+            "| Variant | Task | Outcome | Steps | Step Success | Cost "
+            "| Cheap Steps | Strong Steps | Escalations |"
+        )
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        ss_runs.sort(key=lambda r: (r[0].adapter, r[0].task_id))
+        for trace, _grade_result in ss_runs:
+            ssr = step_success_rate(trace)
+            meta = trace.metadata or {}
+            cost = meta.get("estimated_cost_usd", 0.0)
+            cheap = meta.get("cheap_steps", "—")
+            strong = meta.get("strong_steps", "—")
+            escalations = meta.get("escalations", "—")
+            lines.append(
+                f"| {trace.adapter} | {trace.task_id} "
+                f"| {trace.outcome} | {trace.total_steps} | {ssr:.0%} | ${cost:.4f} "
+                f"| {cheap} | {strong} | {escalations} |"
+            )
+        lines.append("")
+
     # --- Key Findings placeholder ---
     lines.append("## Key Findings")
     lines.append("")

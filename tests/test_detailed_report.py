@@ -264,3 +264,72 @@ class TestGenerateDetailedReport:
         runs = [(_make_trace(), _make_grade(True))]
         report = generate_detailed_report(runs)
         assert "## Key Findings" in report
+
+    def test_structured_state_experiment_section(self):
+        runs = [
+            (
+                _make_trace(
+                    adapter="structured_state_desktop",
+                    metadata={"estimated_cost_usd": 0.01},
+                ),
+                _make_grade(True),
+            ),
+            (
+                _make_trace(
+                    adapter="structured_state_desktop_routed",
+                    metadata={
+                        "estimated_cost_usd": 0.005,
+                        "routing_enabled": True,
+                        "cheap_steps": 4,
+                        "strong_steps": 1,
+                        "escalations": 1,
+                    },
+                ),
+                _make_grade(True),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        assert "## Structured-State Experiment" in report
+        assert "structured_state_desktop_routed" in report
+        assert "Cheap Steps" in report
+
+    def test_structured_state_section_shows_routing_metadata(self):
+        runs = [
+            (
+                _make_trace(
+                    adapter="structured_state_desktop_routed",
+                    metadata={
+                        "estimated_cost_usd": 0.003,
+                        "routing_enabled": True,
+                        "cheap_steps": 7,
+                        "strong_steps": 2,
+                        "escalations": 2,
+                    },
+                ),
+                _make_grade(True),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        assert "## Structured-State Experiment" in report
+        assert "7" in report  # cheap_steps
+        assert "2" in report  # strong_steps
+
+    def test_no_structured_state_section_without_ss_runs(self):
+        runs = [(_make_trace(adapter="deterministic"), _make_grade(True))]
+        report = generate_detailed_report(runs)
+        assert "Structured-State Experiment" not in report
+
+    def test_baseline_ss_shows_dashes_for_routing_fields(self):
+        runs = [
+            (
+                _make_trace(
+                    adapter="structured_state_desktop",
+                    metadata={"estimated_cost_usd": 0.01},
+                ),
+                _make_grade(True),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        assert "## Structured-State Experiment" in report
+        # Baseline has no routing metadata, so should show dashes
+        assert "\u2014" in report

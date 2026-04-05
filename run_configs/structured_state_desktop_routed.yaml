@@ -1,0 +1,5 @@
+adapter: "structured_state_desktop_routed"
+tasks:
+  - "tasks/desktop_textedit_save/task.yaml"
+max_steps: 30
+trial_count: 1

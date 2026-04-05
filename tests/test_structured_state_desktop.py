@@ -545,3 +545,162 @@ class TestAdapterRegistration:
         from harness.runner import ADAPTERS
 
         assert "structured_state_desktop" in ADAPTERS
+
+    def test_routed_registered_in_runner(self) -> None:
+        from harness.runner import ADAPTERS
+
+        assert "structured_state_desktop_routed" in ADAPTERS
+
+    def test_routed_factory_creates_routed_adapter(self) -> None:
+        from harness.runner import ADAPTERS
+
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}),
+            patch("harness.adapters.structured_state_desktop.OpenAI"),
+        ):
+            adapter = ADAPTERS["structured_state_desktop_routed"]()
+            assert adapter.name == "structured_state_desktop_routed"
+            assert adapter._routing_enabled is True
+
+    def test_baseline_factory_creates_non_routed_adapter(self) -> None:
+        adapter = _make_adapter()
+        assert adapter.name == "structured_state_desktop"
+        assert adapter._routing_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Routing heuristic
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingHeuristic:
+    def _make_routed_adapter(self):
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}),
+            patch("harness.adapters.structured_state_desktop.OpenAI") as mock_cls,
+        ):
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            from harness.adapters.structured_state_desktop import StructuredStateDesktopAdapter
+
+            adapter = StructuredStateDesktopAdapter(routing_enabled=True)
+            adapter._client = mock_client
+            return adapter
+
+    def test_rich_tree_uses_cheap_model(self) -> None:
+        adapter = self._make_routed_adapter()
+        model = adapter._route_model(interactive_count=10)
+        assert model == adapter._cheap_model
+        assert adapter._cheap_steps == 1
+        assert adapter._strong_steps == 0
+
+    def test_sparse_tree_escalates_to_strong(self) -> None:
+        adapter = self._make_routed_adapter()
+        model = adapter._route_model(interactive_count=2)
+        assert model == adapter._model  # strong model
+        assert adapter._strong_steps == 1
+        assert adapter._escalations == 1
+
+    def test_post_failure_escalates_to_strong(self) -> None:
+        adapter = self._make_routed_adapter()
+        adapter._last_step_failed = True
+        model = adapter._route_model(interactive_count=10)
+        assert model == adapter._model
+        assert adapter._strong_steps == 1
+        assert adapter._escalations == 1
+
+    def test_routing_disabled_always_strong(self) -> None:
+        adapter = _make_adapter()  # non-routed
+        model = adapter._route_model(interactive_count=10)
+        assert model == adapter._model
+        assert adapter._cheap_steps == 0
+
+    def test_cost_metadata_includes_routing_stats(self) -> None:
+        adapter = self._make_routed_adapter()
+        adapter._cheap_steps = 5
+        adapter._strong_steps = 2
+        adapter._escalations = 2
+        meta = adapter.get_cost_metadata()
+        assert meta["routing_enabled"] is True
+        assert meta["cheap_steps"] == 5
+        assert meta["strong_steps"] == 2
+        assert meta["escalations"] == 2
+        assert "cheap_model" in meta
+
+    def test_cost_metadata_omits_routing_when_disabled(self) -> None:
+        adapter = _make_adapter()
+        meta = adapter.get_cost_metadata()
+        assert "routing_enabled" not in meta
+        assert "cheap_steps" not in meta
+
+    def test_reset_clears_routing_state(self) -> None:
+        adapter = self._make_routed_adapter()
+        adapter._cheap_steps = 3
+        adapter._strong_steps = 1
+        adapter._escalations = 1
+        adapter._last_step_failed = True
+        adapter.reset()
+        assert adapter._cheap_steps == 0
+        assert adapter._strong_steps == 0
+        assert adapter._escalations == 0
+        assert adapter._last_step_failed is False
+
+    def test_routed_decide_records_model_in_evidence(self) -> None:
+        adapter = self._make_routed_adapter()
+        tree = _sample_tree()
+        obs = _make_observation(tree)
+        task = _make_task()
+
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(message=MagicMock(content=json.dumps({"action": "done"})))
+        ]
+        mock_response.usage = MagicMock(prompt_tokens=50, completion_tokens=20)
+
+        with patch.object(adapter._client.chat.completions, "create", return_value=mock_response):
+            adapter.decide(obs, task)
+
+        evidence = adapter.get_step_evidence()
+        assert len(evidence) == 1
+        assert "model_used" in evidence[0]
+        assert "routing_tier" in evidence[0]
+
+    def test_routed_name_property(self) -> None:
+        adapter = self._make_routed_adapter()
+        assert adapter.name == "structured_state_desktop_routed"
+
+    def test_parse_failure_retry_escalates_to_strong(self) -> None:
+        """When cheap model returns unparseable response, adapter retries with strong model."""
+        adapter = self._make_routed_adapter()
+        tree = _sample_tree()
+        obs = _make_observation(tree)
+        task = _make_task()
+
+        # First call (cheap model) returns garbage, second call (strong model) returns valid JSON
+        bad_response = MagicMock()
+        bad_response.choices = [MagicMock(message=MagicMock(content="this is not json at all"))]
+        bad_response.usage = MagicMock(prompt_tokens=50, completion_tokens=20)
+
+        good_response = MagicMock()
+        good_response.choices = [
+            MagicMock(message=MagicMock(content=json.dumps({"action": "done"})))
+        ]
+        good_response.usage = MagicMock(prompt_tokens=50, completion_tokens=20)
+
+        with patch.object(
+            adapter._client.chat.completions,
+            "create",
+            side_effect=[bad_response, good_response],
+        ):
+            actions = adapter.decide(obs, task)
+
+        assert len(actions) == 1
+        assert actions[0].action_type == ActionType.DONE
+        assert adapter._escalations == 1
+        # The cheap step was reclassified to strong
+        assert adapter._cheap_steps == 0
+        assert adapter._strong_steps == 1
+        # Evidence should show the strong model was ultimately used
+        evidence = adapter.get_step_evidence()
+        assert evidence[0]["routing_tier"] == "strong"
+        assert evidence[0]["model_used"] == adapter._model
