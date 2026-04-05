@@ -35,12 +35,15 @@ from harness.types import (
 _AdapterFactory = type | Callable[[], Any]
 
 ADAPTERS: dict[str, _AdapterFactory] = {
+    # -- Primary desktop path (structured accessibility state → LLM → semantic actions) --
+    "structured_state_desktop": StructuredStateDesktopAdapter,
+    "structured_state_desktop_routed": lambda: StructuredStateDesktopAdapter(routing_enabled=True),
+    # -- Permanent baselines --
     "deterministic": DeterministicAdapter,
+    # -- Legacy comparison lanes (retained for historical benchmarking) --
     "openai_cu": OpenAIComputerUseAdapter,
     "openai_cu_hybrid": lambda: OpenAIComputerUseAdapter(hybrid=True),
     "codex_subscription": CodexSubscriptionAdapter,
-    "structured_state_desktop": StructuredStateDesktopAdapter,
-    "structured_state_desktop_routed": lambda: StructuredStateDesktopAdapter(routing_enabled=True),
 }
 
 ENVIRONMENTS: dict[str, type] = {

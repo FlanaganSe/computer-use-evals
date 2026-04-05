@@ -1,3 +1,5 @@
+# Primary desktop path with cheap-first routing: cheap model for well-grounded
+# AX decisions, strong model for ambiguous or post-failure steps.
 adapter: "structured_state_desktop_routed"
 tasks:
   - "tasks/desktop_textedit_save/task.yaml"

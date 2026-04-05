@@ -1,0 +1,17 @@
+# Legacy screenshot-first adapter on the same desktop task used by the primary
+# structured-state configs. Enables cross-adapter comparison of success rate,
+# step count, and cost when run alongside the structured-state configs.
+#
+# To produce a full desktop comparison, run each adapter separately:
+#   uv run python -m harness run tasks/desktop_textedit_save/task.yaml --adapter structured_state_desktop
+#   uv run python -m harness run tasks/desktop_textedit_save/task.yaml --adapter structured_state_desktop_routed
+#   uv run python -m harness run tasks/desktop_textedit_save/task.yaml --adapter openai_cu
+#   uv run python -m harness compare --runs-dir runs --detailed
+#
+# Note: openai_cu declares a browser tool environment in its API calls even
+# when running against desktop tasks. Results may differ from browser usage.
+adapter: "openai_cu"
+tasks:
+  - "tasks/desktop_textedit_save/task.yaml"
+max_steps: 30
+trial_count: 1

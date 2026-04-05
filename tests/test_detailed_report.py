@@ -252,13 +252,13 @@ class TestGenerateDetailedReport:
             (_make_trace(adapter="openai_cu_hybrid"), _make_grade(True)),
         ]
         report = generate_detailed_report(runs)
-        assert "## Observation Experiment" in report
+        assert "## Observation Mode Comparison (Legacy)" in report
         assert "openai_cu_hybrid" in report
 
     def test_no_observation_section_without_openai(self):
         runs = [(_make_trace(adapter="deterministic"), _make_grade(True))]
         report = generate_detailed_report(runs)
-        assert "Observation Experiment" not in report
+        assert "Observation Mode Comparison (Legacy)" not in report
 
     def test_key_findings_placeholder(self):
         runs = [(_make_trace(), _make_grade(True))]
@@ -289,7 +289,7 @@ class TestGenerateDetailedReport:
             ),
         ]
         report = generate_detailed_report(runs)
-        assert "## Structured-State Experiment" in report
+        assert "## Structured-State Desktop" in report
         assert "structured_state_desktop_routed" in report
         assert "Cheap Steps" in report
 
@@ -310,14 +310,14 @@ class TestGenerateDetailedReport:
             ),
         ]
         report = generate_detailed_report(runs)
-        assert "## Structured-State Experiment" in report
+        assert "## Structured-State Desktop" in report
         assert "7" in report  # cheap_steps
         assert "2" in report  # strong_steps
 
     def test_no_structured_state_section_without_ss_runs(self):
         runs = [(_make_trace(adapter="deterministic"), _make_grade(True))]
         report = generate_detailed_report(runs)
-        assert "Structured-State Experiment" not in report
+        assert "Structured-State Desktop" not in report
 
     def test_baseline_ss_shows_dashes_for_routing_fields(self):
         runs = [
@@ -330,6 +330,6 @@ class TestGenerateDetailedReport:
             ),
         ]
         report = generate_detailed_report(runs)
-        assert "## Structured-State Experiment" in report
+        assert "## Structured-State Desktop" in report
         # Baseline has no routing metadata, so should show dashes
         assert "\u2014" in report

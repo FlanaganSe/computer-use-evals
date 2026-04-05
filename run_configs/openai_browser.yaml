@@ -1,3 +1,5 @@
+# Legacy comparison lane: OpenAI computer-use (screenshot-first) on browser tasks.
+# Retained for benchmarking against the structured-state desktop path.
 adapter: "openai_cu"
 tasks:
   - "tasks/browser_download/task.yaml"

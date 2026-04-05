@@ -1,3 +1,5 @@
+# Permanent baseline: deterministic scripted adapter for browser tasks.
+# Always available as a sanity check — no API calls, fully reproducible.
 adapter: "deterministic"
 tasks:
   - "tasks/browser_download/task.yaml"

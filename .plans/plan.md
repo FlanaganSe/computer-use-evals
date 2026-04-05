@@ -357,7 +357,13 @@ Acceptance experiments:
 - Cheap-first routing:
   - accept if routed mode retains at least 90% of always-strong success on the trusted set at meaningfully lower cost
 
-#### Milestone 5: Default Promotion and Legacy Demotion
+#### ~~Milestone 5: Default Promotion and Legacy Demotion~~ ✓ Complete
+
+- [x] Step 1 — Annotate runner ADAPTERS and CLI help text to indicate primary vs baseline adapters → verify: `python -m pytest tests/test_structured_state_desktop.py -v -k "test_registered"`
+- [x] Step 2 — Relabel reporting sections: rename "Structured-State Experiment" to "Structured-State Desktop", rename "Observation Experiment" to "Observation Mode Comparison (Legacy)"; update tests → verify: `python -m pytest tests/test_detailed_report.py -v`
+- [x] Step 3 — Rewrite README.md to present structured-state as primary desktop path, demote legacy adapters to comparison lanes, clean stale content → verify: visual inspection
+- [x] Step 4 — Add descriptive comments to run configs; add desktop_comparison.yaml for explicit cross-adapter comparison story → verify: `python -m pytest tests/ -v --ignore=tests/test_deterministic_smoke.py --ignore=tests/test_openai_adapter.py`
+Commit: "promote structured-state desktop as primary path"
 
 Objective:
 

@@ -1,3 +1,5 @@
+# Legacy comparison lane: OpenAI computer-use hybrid (screenshot + ARIA) on browser tasks.
+# Retained for observation-mode comparison against screenshot-only (openai_browser.yaml).
 adapter: "openai_cu_hybrid"
 tasks:
   - "tasks/browser_download/task.yaml"

@@ -1,3 +1,5 @@
+# Primary desktop path: structured accessibility state → LLM → semantic actions.
+# Uses a single strong model for all steps (no routing).
 adapter: "structured_state_desktop"
 tasks:
   - "tasks/desktop_textedit_save/task.yaml"

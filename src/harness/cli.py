@@ -18,7 +18,13 @@ def main(argv: list[str] | None = None) -> None:
 
     run_parser = subparsers.add_parser("run", help="Run a task")
     run_parser.add_argument("task", help="Path to task YAML file")
-    run_parser.add_argument("--adapter", required=True, help="Adapter name")
+    run_parser.add_argument(
+        "--adapter",
+        required=True,
+        help="Adapter name (primary: structured_state_desktop, "
+        "structured_state_desktop_routed; baselines: deterministic; "
+        "legacy comparison: openai_cu, openai_cu_hybrid, codex_subscription)",
+    )
     run_parser.add_argument("--max-steps", type=int, default=30, help="Maximum steps")
     run_parser.add_argument("--runs-dir", default="runs", help="Output directory for runs")
 

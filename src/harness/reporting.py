@@ -427,10 +427,10 @@ def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
 
     lines.append("")
 
-    # --- Observation experiment (if hybrid runs exist) ---
+    # --- Legacy observation comparison (if openai_cu/hybrid runs exist) ---
     hybrid_runs = [r for r in runs if r[0].adapter in ("openai_cu", "openai_cu_hybrid")]
     if hybrid_runs:
-        lines.append("## Observation Experiment")
+        lines.append("## Observation Mode Comparison (Legacy)")
         lines.append("")
         lines.append("| Variant | Task | Outcome | Steps | Step Success | Cost |")
         lines.append("|---|---|---|---|---|---|")
@@ -444,14 +444,14 @@ def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
             )
         lines.append("")
 
-    # --- Structured-state experiment (if structured-state runs exist) ---
+    # --- Structured-state desktop (primary desktop path) ---
     ss_runs = [
         r
         for r in runs
         if r[0].adapter in ("structured_state_desktop", "structured_state_desktop_routed")
     ]
     if ss_runs:
-        lines.append("## Structured-State Experiment")
+        lines.append("## Structured-State Desktop")
         lines.append("")
         lines.append(
             "| Variant | Task | Outcome | Steps | Step Success | Cost "
