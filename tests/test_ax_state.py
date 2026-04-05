@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from harness.ax_state import (
     AXNode,
+    _make_node_id,
     build_ax_tree_from_dict,
     coverage_stats,
     find_node_by_id,
     format_for_prompt,
     prune_interactive,
-    _make_node_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stable ID generation

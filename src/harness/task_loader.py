@@ -133,7 +133,12 @@ def _substitute_in_dict(d: dict[str, Any], variables: dict[str, str]) -> dict[st
             result[k] = _substitute_in_dict(v, variables)
         elif isinstance(v, list):
             result[k] = [
-                _substitute(item, variables) if isinstance(item, str) else item for item in v
+                _substitute(item, variables)
+                if isinstance(item, str)
+                else _substitute_in_dict(item, variables)
+                if isinstance(item, dict)
+                else item
+                for item in v
             ]
         else:
             result[k] = v

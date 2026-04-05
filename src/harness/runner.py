@@ -7,6 +7,7 @@ import contextlib
 import importlib
 import importlib.util
 import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,8 @@ from harness.types import (
     StepRecord,
     Trace,
 )
+
+logger = logging.getLogger(__name__)
 
 _AdapterFactory = type | Callable[[], Any]
 
@@ -193,7 +196,9 @@ async def _run_task_async(
             try:
                 trace.milestone_results = evaluate_milestones(task, run_dir)
             except Exception:
-                pass  # milestone_results stays [] — primary outcome unaffected
+                logger.warning(
+                    "Milestone evaluation failed for task %s", task.task_id, exc_info=True
+                )
 
             # Refine failure categorization using milestone evidence:
             # If final grading failed but some milestones passed, we know

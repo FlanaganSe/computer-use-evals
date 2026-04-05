@@ -177,7 +177,7 @@ def semantic_action_ratio(trace: Trace) -> float:
     semantic = 0
     pixel = 0
     for s in trace.steps:
-        if "selector" in s.action:
+        if "selector" in s.action or "semantic_target" in s.action:
             semantic += 1
         elif "x" in s.action and "y" in s.action:
             pixel += 1

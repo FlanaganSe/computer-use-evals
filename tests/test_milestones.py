@@ -6,13 +6,13 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from harness.failures import FailureCategory
 from harness.graders import evaluate_milestones
 from harness.reporting import (
     generate_comparison_report,
     generate_detailed_report,
     generate_report,
 )
-from harness.failures import FailureCategory
 from harness.types import (
     GraderResult,
     Milestone,

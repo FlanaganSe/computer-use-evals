@@ -127,7 +127,9 @@ def _make_node_id(role: str, title: str, ancestry_path: str, sibling_index: int 
 def _get_attr(element: Any, attr_name: str) -> Any:
     """Safely get an AX attribute from an element."""
     try:
-        from ApplicationServices import AXUIElementCopyAttributeValue  # type: ignore[import-untyped]
+        from ApplicationServices import (  # type: ignore[import-untyped]
+            AXUIElementCopyAttributeValue,
+        )
 
         err, value = AXUIElementCopyAttributeValue(element, attr_name, None)
         if err == 0:

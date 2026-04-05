@@ -67,14 +67,22 @@ _KEY_ALIASES: dict[str, str] = {
 }
 
 
-def _normalize_keys(raw: str) -> list[str]:
+def _normalize_keys(raw: str | list[str]) -> list[str]:
     """Normalize a key combo string into pyautogui-compatible key names.
 
     Handles all common formats:
       - Unicode:  ⌘S, ⌘⇧S, ⌫
       - ASCII:    CMD+S, CMD+SHIFT+S, command+s
       - Mixed:    ⌘+S
+      - List:     ["CMD", "SHIFT", "S"]  (LLM sometimes returns this)
     """
+    # Handle list input by normalizing each element individually.
+    if isinstance(raw, list):
+        result: list[str] = []
+        for item in raw:
+            result.extend(_normalize_keys(str(item)))
+        return result
+
     # Step 1: expand Unicode modifier/key symbols to "name+" so they
     # participate in the subsequent split.
     s = raw
@@ -273,6 +281,8 @@ class MacOSDesktopEnvironment:
                 if key is None:
                     return "error:press requires 'key' param"
                 keys = _normalize_keys(key)
+                if not keys:
+                    return "error:press requires a non-empty key list"
                 pyautogui.hotkey(*keys)
                 await asyncio.sleep(_ACTION_SETTLE_DELAY)
                 return "ok"
@@ -363,9 +373,7 @@ class MacOSDesktopEnvironment:
         """Detect whether a SHELL command is expected to change the frontmost app."""
         if command == "open" and "-a" in args:
             return True
-        if command == "osascript" and any("activate" in a for a in args):
-            return True
-        return False
+        return command == "osascript" and any("activate" in a for a in args)
 
     async def teardown(self) -> None:
         pass  # No persistent resources to clean up

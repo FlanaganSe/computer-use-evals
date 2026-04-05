@@ -43,16 +43,7 @@ uv run python -m harness compare --runs-dir runs --detailed
 
 ### Run configs
 
-Pre-built configurations live in `run_configs/`. Key configs:
-
-| Config | Purpose |
-|---|---|
-| `structured_state_desktop.yaml` | Primary desktop path (baseline structured-state) |
-| `structured_state_desktop_routed.yaml` | Primary desktop path with cheap-first routing |
-| `desktop_comparison.yaml` | Cross-adapter desktop comparison (structured-state vs legacy screenshot) |
-| `deterministic.yaml` | Permanent browser baseline |
-| `openai_browser.yaml` | Legacy screenshot adapter — browser comparison lane |
-| `openai_hybrid.yaml` | Legacy screenshot+ARIA hybrid — browser comparison lane |
+Pre-built experiment configurations live in `run_configs/`. These define task × adapter × trial-count matrices for comparison runs. The CLI does not yet execute them directly — config-driven batch execution is planned for a future milestone. For now, use the individual `run` commands above.
 
 ### Inspect results
 

@@ -223,6 +223,15 @@ class TestActionExecution:
         assert result == "ok"
         mock_hotkey.assert_called_once_with("command", "shift", "s")
 
+    @patch("pyautogui.hotkey")
+    def test_press_action_with_list_key(self, mock_hotkey: MagicMock) -> None:
+        """press_keys with list key param must not crash (B3)."""
+        env = MacOSDesktopEnvironment()
+        action = Action(action_type=ActionType.PRESS, params={"key": ["CMD", "SHIFT", "S"]})
+        result = self._run_action(env, action)
+        assert result == "ok"
+        mock_hotkey.assert_called_once_with("command", "shift", "s")
+
     def test_shell_action_success(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(
@@ -380,6 +389,13 @@ class TestKeyNormalization:
             "command",
             "backspace",
         ]
+
+    def test_list_input(self) -> None:
+        """LLM sometimes returns key as a list — must not crash."""
+        assert _normalize_keys(["CMD", "SHIFT", "S"]) == ["command", "shift", "s"]
+
+    def test_list_input_single_key(self) -> None:
+        assert _normalize_keys(["escape"]) == ["escape"]
 
 
 # ---------------------------------------------------------------------------

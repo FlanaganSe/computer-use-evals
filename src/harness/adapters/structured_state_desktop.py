@@ -428,10 +428,7 @@ class StructuredStateDesktopAdapter:
             params["y"] = int(fallback_y)
 
         # Add action-specific params
-        if action_name == "type_text" and value:
-            params["text"] = value
-            action_type = ActionType.TYPE
-        elif action_name == "set_value" and value:
+        if action_name in ("type_text", "set_value") and value:
             params["text"] = value
             action_type = ActionType.TYPE
         elif action_name == "press_keys" and value:

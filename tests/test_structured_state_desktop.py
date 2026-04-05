@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 from harness.ax_state import AXNode, build_ax_tree_from_dict
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

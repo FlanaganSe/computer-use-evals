@@ -428,7 +428,10 @@ def _call_llm_judge(prompt: str, task: Task, run_dir: Path, threshold: float) ->
     # Apply threshold
     if passed and confidence < threshold:
         passed = False
-        explanation = f"Passed but below confidence threshold ({confidence:.2f} < {threshold:.2f}): {explanation}"
+        explanation = (
+            f"Passed but below confidence threshold"
+            f" ({confidence:.2f} < {threshold:.2f}): {explanation}"
+        )
 
     return GraderResult(
         passed=passed,

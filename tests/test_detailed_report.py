@@ -135,6 +135,23 @@ class TestSemanticActionRatio:
         trace = _make_trace(steps=steps)
         assert semantic_action_ratio(trace) == 0.5
 
+    def test_semantic_target_field(self):
+        """structured-state adapter emits 'semantic_target', not 'selector' (B5)."""
+        steps = [
+            _make_step(1, action={"type": "click", "semantic_target": "ax_abc123"}),
+            _make_step(2, action={"type": "click", "x": 100, "y": 200}),
+        ]
+        trace = _make_trace(steps=steps)
+        assert semantic_action_ratio(trace) == 0.5
+
+    def test_all_semantic_target(self):
+        steps = [
+            _make_step(1, action={"type": "click", "semantic_target": "ax_abc123"}),
+            _make_step(2, action={"type": "click", "semantic_target": "ax_def456"}),
+        ]
+        trace = _make_trace(steps=steps)
+        assert semantic_action_ratio(trace) == 1.0
+
     def test_neither_semantic_nor_pixel(self):
         steps = [_make_step(1, action={"type": "done"})]
         trace = _make_trace(steps=steps)

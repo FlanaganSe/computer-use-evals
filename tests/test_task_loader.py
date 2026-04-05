@@ -226,6 +226,29 @@ class TestMilestoneLoading:
         task = load_task(path)
         assert task.milestones == []
 
+    def test_milestone_variables_substituted_in_check(self, task_dir: Path) -> None:
+        """Dicts nested inside lists (milestones) must have variables resolved (B4)."""
+        data = {
+            **VALID_TASK,
+            "milestones": [
+                {
+                    "id": "file_saved",
+                    "description": "File saved to {{filename}}",
+                    "check": {
+                        "method": "programmatic",
+                        "check": "file_exists('{{filename}}')",
+                    },
+                }
+            ],
+        }
+        path = _write_task(task_dir, data)
+        task = load_task(path)
+        assert "{{filename}}" not in task.milestones[0].description
+        assert "test.pdf" in task.milestones[0].description
+        assert task.milestones[0].check.check is not None
+        assert "{{filename}}" not in task.milestones[0].check.check
+        assert "test.pdf" in task.milestones[0].check.check
+
     def test_milestone_check_validated(self, task_dir: Path) -> None:
         data = {
             **VALID_TASK,
