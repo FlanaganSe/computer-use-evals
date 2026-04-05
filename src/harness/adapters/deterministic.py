@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from harness.runtime_results import RuntimeResult
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 
@@ -37,6 +38,9 @@ class DeterministicAdapter:
         return actions
 
     def reset(self) -> None:
+        pass
+
+    def notify_result(self, action: Action, result: RuntimeResult) -> None:
         pass
 
 

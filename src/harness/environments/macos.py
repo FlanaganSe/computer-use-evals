@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.ax_state import AXNode, build_ax_tree, find_node_by_id
+from harness.runtime_results import ExecutionMethod, RuntimeResult, done, error, fail, ok
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
@@ -243,7 +244,7 @@ class MacOSDesktopEnvironment:
 
         return action
 
-    async def execute_action(self, action: Action) -> str:
+    async def execute_action(self, action: Action) -> RuntimeResult:
         import pyautogui  # type: ignore[import-untyped]
 
         # Resolve semantic targets to coordinates if needed
@@ -255,53 +256,62 @@ class MacOSDesktopEnvironment:
                 if "x" in params and "y" in params:
                     pyautogui.click(int(params["x"]), int(params["y"]))
                     await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                    return "ok"
+                    return ok(method=ExecutionMethod.COORDINATES)
                 if self._try_ax_press(params.get("semantic_target")):
                     await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                    return "ok"
-                return "error:click requires x,y coordinates or a pressable AX element"
+                    return ok(method=ExecutionMethod.AX_PRESS)
+                return error(
+                    "click requires x,y coordinates or a pressable AX element",
+                    target_resolved=False,
+                )
 
             case ActionType.DOUBLE_CLICK:
                 if "x" in params and "y" in params:
                     pyautogui.doubleClick(int(params["x"]), int(params["y"]))
                     await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                    return "ok"
-                return "error:double_click requires x,y coordinates for desktop"
+                    return ok(method=ExecutionMethod.COORDINATES)
+                return error(
+                    "double_click requires x,y coordinates for desktop",
+                    target_resolved=False,
+                )
 
             case ActionType.TYPE:
                 text = params.get("text")
                 if text is None:
-                    return "error:type requires 'text' param"
+                    return error("type requires 'text' param")
                 pyautogui.write(text, interval=0.02)
                 await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return "ok"
+                return ok(method=ExecutionMethod.KEYBOARD)
 
             case ActionType.PRESS:
                 key = params.get("key")
                 if key is None:
-                    return "error:press requires 'key' param"
+                    return error("press requires 'key' param")
                 keys = _normalize_keys(key)
                 if not keys:
-                    return "error:press requires a non-empty key list"
+                    return error("press requires a non-empty key list")
                 pyautogui.hotkey(*keys)
                 await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return "ok"
+                return ok(method=ExecutionMethod.KEYBOARD)
 
             case ActionType.SCROLL:
                 clicks = params.get("delta_y", 0)
                 pyautogui.scroll(int(clicks))
                 await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return "ok"
+                return ok(method=ExecutionMethod.COORDINATES)
 
             case ActionType.WAIT:
                 ms = params.get("ms", 1000)
                 await asyncio.sleep(int(ms) / 1000.0)
-                return "ok"
+                return ok(method=ExecutionMethod.WAIT)
 
             case ActionType.SHELL:
                 command = params.get("command", "")
                 if command not in _SHELL_ALLOWLIST:
-                    return f"error:shell command {command!r} not in allowlist {_SHELL_ALLOWLIST}"
+                    return error(
+                        f"shell command {command!r} not in allowlist {_SHELL_ALLOWLIST}",
+                        method=ExecutionMethod.SHELL,
+                    )
                 args = params.get("args", [])
 
                 # Record pre-command frontmost app for app-switch detection
@@ -311,37 +321,40 @@ class MacOSDesktopEnvironment:
                     pre_info = _get_window_info()
                     pre_app = pre_info.get("focused_app")
 
-                result = subprocess.run(
+                proc_result = subprocess.run(
                     [command, *args],
                     capture_output=True,
                     text=True,
                     timeout=30,
                 )
-                if result.returncode != 0:
-                    stderr = result.stderr.strip()
-                    return f"error:shell returned {result.returncode}: {stderr}"
+                if proc_result.returncode != 0:
+                    stderr = proc_result.stderr.strip()
+                    return error(
+                        f"shell returned {proc_result.returncode}: {stderr}",
+                        method=ExecutionMethod.SHELL,
+                    )
 
                 if is_app_switch and pre_app is not None:
                     await _wait_for_app_focus_change(pre_app)
                 else:
                     await asyncio.sleep(_ACTION_SETTLE_DELAY)
-                return "ok"
+                return ok(method=ExecutionMethod.SHELL)
 
             case ActionType.MOVE:
                 if "x" in params and "y" in params:
                     pyautogui.moveTo(int(params["x"]), int(params["y"]))
-                    return "ok"
-                return "error:move requires x,y coordinates"
+                    return ok(method=ExecutionMethod.COORDINATES)
+                return error("move requires x,y coordinates")
 
             case ActionType.DONE:
-                return "done"
+                return done()
 
             case ActionType.FAIL:
                 reason = params.get("reason", "Agent declared failure")
-                return f"fail:{reason}"
+                return fail(reason)
 
             case _:
-                return f"error:unsupported action type {action.action_type} for desktop"
+                return error(f"unsupported action type {action.action_type} for desktop")
 
     def _try_ax_press(self, target_id: str | None) -> bool:
         """Try to perform AXPress on an element by its node ID.

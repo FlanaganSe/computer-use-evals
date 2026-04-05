@@ -14,6 +14,7 @@ from harness.environments.macos import (
     _normalize_keys,
     _serialize_ax_element,
 )
+from harness.runtime_results import ExecutionMethod, RuntimeResult
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 # ---------------------------------------------------------------------------
@@ -174,7 +175,7 @@ class TestObservation:
 
 
 class TestActionExecution:
-    def _run_action(self, env: MacOSDesktopEnvironment, action: Action) -> str:
+    def _run_action(self, env: MacOSDesktopEnvironment, action: Action) -> RuntimeResult:
         return asyncio.run(env.execute_action(action))
 
     @patch("pyautogui.click")
@@ -182,21 +183,24 @@ class TestActionExecution:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.CLICK, params={"x": 100, "y": 200})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
+        assert result.execution_method == ExecutionMethod.COORDINATES
         mock_click.assert_called_once_with(100, 200)
 
     def test_click_without_coords(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.CLICK, params={})
         result = self._run_action(env, action)
-        assert "error" in result
+        assert result.summary.startswith("error")
+        assert result.target_resolved is False
 
     @patch("pyautogui.write")
     def test_type_action(self, mock_write: MagicMock) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.TYPE, params={"text": "hello"})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
+        assert result.execution_method == ExecutionMethod.KEYBOARD
         mock_write.assert_called_once_with("hello", interval=0.02)
 
     @patch("pyautogui.hotkey")
@@ -204,7 +208,7 @@ class TestActionExecution:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.PRESS, params={"key": "command+s"})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
         mock_hotkey.assert_called_once_with("command", "s")
 
     @patch("pyautogui.hotkey")
@@ -212,7 +216,7 @@ class TestActionExecution:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.PRESS, params={"key": "\u2318S"})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
         mock_hotkey.assert_called_once_with("command", "s")
 
     @patch("pyautogui.hotkey")
@@ -220,7 +224,7 @@ class TestActionExecution:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.PRESS, params={"key": "CMD+SHIFT+S"})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
         mock_hotkey.assert_called_once_with("command", "shift", "s")
 
     @patch("pyautogui.hotkey")
@@ -229,7 +233,7 @@ class TestActionExecution:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.PRESS, params={"key": ["CMD", "SHIFT", "S"]})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
         mock_hotkey.assert_called_once_with("command", "shift", "s")
 
     def test_shell_action_success(self) -> None:
@@ -239,7 +243,8 @@ class TestActionExecution:
             params={"command": "osascript", "args": ["-e", 'return "ok"']},
         )
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
+        assert result.execution_method == ExecutionMethod.SHELL
 
     def test_shell_action_blocked_command(self) -> None:
         env = MacOSDesktopEnvironment()
@@ -248,19 +253,19 @@ class TestActionExecution:
             params={"command": "/bin/sh", "args": ["-c", "echo pwned"]},
         )
         result = self._run_action(env, action)
-        assert "not in allowlist" in result
+        assert "not in allowlist" in result.summary
 
     def test_type_without_text_param(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.TYPE, params={})
         result = self._run_action(env, action)
-        assert "error" in result
+        assert result.summary.startswith("error")
 
     def test_press_without_key_param(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.PRESS, params={})
         result = self._run_action(env, action)
-        assert "error" in result
+        assert result.summary.startswith("error")
 
     def test_shell_open_app_waits_for_focus(self) -> None:
         """open -a command should wait for frontmost app to change."""
@@ -291,7 +296,7 @@ class TestActionExecution:
         ):
             result = self._run_action(env, action)
 
-        assert result == "ok"
+        assert result.summary == "ok"
         assert call_count >= 3  # polled until focus changed
 
     def test_shell_non_app_switch_uses_settle_delay(self) -> None:
@@ -302,7 +307,7 @@ class TestActionExecution:
             params={"command": "osascript", "args": ["-e", 'return "ok"']},
         )
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
 
     def test_is_app_switch_detection(self) -> None:
         assert MacOSDesktopEnvironment._is_app_switch_command("open", ["-a", "TextEdit"]) is True
@@ -322,19 +327,19 @@ class TestActionExecution:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.WAIT, params={"ms": 10})
         result = self._run_action(env, action)
-        assert result == "ok"
+        assert result.summary == "ok"
 
     def test_done_action(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.DONE)
         result = self._run_action(env, action)
-        assert result == "done"
+        assert result.summary == "done"
 
     def test_fail_action(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.FAIL, params={"reason": "test"})
         result = self._run_action(env, action)
-        assert result == "fail:test"
+        assert result.summary == "fail:test"
 
 
 # ---------------------------------------------------------------------------

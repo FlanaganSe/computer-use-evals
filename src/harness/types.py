@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 
 from harness.failures import FailureCategory
+from harness.runtime_results import RuntimeResult
 
 # ---------------------------------------------------------------------------
 # Observation types — what an adapter can request from the environment
@@ -246,6 +247,16 @@ class Adapter(Protocol):
         """Reset adapter state for a new trial."""
         ...
 
+    def notify_result(self, action: Action, result: RuntimeResult) -> None:
+        """Receive the runtime result of the last executed action.
+
+        Called by the runner after each action execution so adapters can
+        update internal state (e.g., action history) with actual outcomes
+        instead of leaving them as "pending".
+
+        Default: no-op. Adapters that track action history should override.
+        """
+
 
 # ---------------------------------------------------------------------------
 # Environment protocol — browser, desktop, etc.
@@ -260,6 +271,6 @@ class Environment(Protocol):
 
     async def collect_observation(self, observation_type: ObservationType) -> Observation: ...
 
-    async def execute_action(self, action: Action) -> str: ...
+    async def execute_action(self, action: Action) -> RuntimeResult: ...
 
     async def teardown(self) -> None: ...

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from harness.runtime_results import RuntimeResult
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,9 @@ class CodexSubscriptionAdapter:
         self._action_history = []
         self._invocation_count = 0
         self._total_latency_ms = 0
+
+    def notify_result(self, action: Action, result: RuntimeResult) -> None:
+        pass
 
     def get_cost_metadata(self) -> dict[str, Any]:
         return {

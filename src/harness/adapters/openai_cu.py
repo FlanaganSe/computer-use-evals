@@ -9,6 +9,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from harness.runtime_results import RuntimeResult
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,9 @@ class OpenAIComputerUseAdapter:
         self._input_tokens = 0
         self._output_tokens = 0
         self._api_calls = 0
+
+    def notify_result(self, action: Action, result: RuntimeResult) -> None:
+        pass
 
     def get_cost_metadata(self) -> dict[str, Any]:
         return {

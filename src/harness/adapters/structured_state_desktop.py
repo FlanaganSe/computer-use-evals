@@ -15,6 +15,7 @@ from typing import Any
 from openai import OpenAI
 
 from harness.ax_state import AXNode, find_node_by_id, format_for_prompt, prune_interactive
+from harness.runtime_results import RuntimeResult
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,8 @@ class StructuredStateDesktopAdapter:
 
         actions = self._semantic_to_actions(semantic, ax_tree)
 
-        # Update history
+        # Append history entry — result starts as "pending" and is updated
+        # by notify_result() once the runner executes the action.
         action_desc = semantic.get("action", "unknown")
         target = semantic.get("target", "")
         self._action_history.append(
@@ -192,6 +194,11 @@ class StructuredStateDesktopAdapter:
             self._action_history = self._action_history[-_MAX_HISTORY:]
 
         return actions
+
+    def notify_result(self, action: Action, result: RuntimeResult) -> None:
+        """Update the most recent action history entry with the actual result."""
+        if self._action_history:
+            self._action_history[-1]["result"] = result.summary
 
     def reset(self) -> None:
         self._action_history = []

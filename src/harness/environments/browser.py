@@ -13,6 +13,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from harness.runtime_results import ExecutionMethod, RuntimeResult, done, error, fail, ok
 from harness.types import Action, ActionType, Observation, ObservationType, Task
 
 VIEWPORT_WIDTH = 1280
@@ -92,14 +93,14 @@ class BrowserEnvironment:
             page_title=title,
         )
 
-    async def execute_action(self, action: Action) -> str:
+    async def execute_action(self, action: Action) -> RuntimeResult:
         page = self.page
         params = action.params
 
         match action.action_type:
             case ActionType.GOTO:
                 await page.goto(params["url"], wait_until="domcontentloaded")
-                return "ok"
+                return ok(method=ExecutionMethod.OTHER)
 
             case ActionType.CLICK:
                 expect_download = params.get("expect_download", False)
@@ -111,49 +112,53 @@ class BrowserEnvironment:
                         save_as = params.get("save_as", download.suggested_filename)
                         save_path = self._downloads_path / save_as
                         await download.save_as(str(save_path))
-                        return f"ok:downloaded:{save_path.name}"
-                    return "ok"
+                        return ok(
+                            f"downloaded:{save_path.name}",
+                            method=ExecutionMethod.SELECTOR,
+                            metadata={"filename": save_path.name},
+                        )
+                    return ok(method=ExecutionMethod.SELECTOR)
                 elif "selector" in params:
                     await page.click(params["selector"])
-                    return "ok"
+                    return ok(method=ExecutionMethod.SELECTOR)
                 elif "x" in params and "y" in params:
                     await page.mouse.click(params["x"], params["y"])
-                    return "ok"
+                    return ok(method=ExecutionMethod.COORDINATES)
                 else:
-                    return "error:click requires selector or coordinates"
+                    return error("click requires selector or coordinates", target_resolved=False)
 
             case ActionType.TYPE:
                 if "selector" in params:
                     await page.fill(params["selector"], params["text"])
                 else:
                     await page.keyboard.type(params["text"])
-                return "ok"
+                return ok(method=ExecutionMethod.KEYBOARD)
 
             case ActionType.PRESS:
                 await page.keyboard.press(params["key"])
-                return "ok"
+                return ok(method=ExecutionMethod.KEYBOARD)
 
             case ActionType.SCROLL:
                 await page.mouse.wheel(
                     params.get("delta_x", 0),
                     params.get("delta_y", 0),
                 )
-                return "ok"
+                return ok(method=ExecutionMethod.COORDINATES)
 
             case ActionType.WAIT:
                 ms = params.get("ms", 1000)
                 await page.wait_for_timeout(ms)
-                return "ok"
+                return ok(method=ExecutionMethod.WAIT)
 
             case ActionType.DONE:
-                return "done"
+                return done()
 
             case ActionType.FAIL:
                 reason = params.get("reason", "Agent declared failure")
-                return f"fail:{reason}"
+                return fail(reason)
 
             case _:
-                return f"error:unsupported action type {action.action_type}"
+                return error(f"unsupported action type {action.action_type}")
 
     async def teardown(self) -> None:
         if self._context is not None:

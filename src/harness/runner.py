@@ -24,6 +24,9 @@ from harness.environments.macos import MacOSDesktopEnvironment
 from harness.failures import FailureCategory
 from harness.graders import evaluate_milestones, grade
 from harness.reporting import generate_report
+from harness.runtime_results import ResultStatus, RuntimeResult
+from harness.runtime_results import done as rt_done
+from harness.runtime_results import fail as rt_fail
 from harness.task_loader import load_task
 from harness.types import (
     Action,
@@ -118,7 +121,7 @@ async def _run_task_async(
 
         # Main loop
         step_num = 0
-        done = False
+        loop_done = False
         for _ in range(max_steps):
             obs_type = adapter.observation_request()
             observation = await env.collect_observation(obs_type)
@@ -128,52 +131,66 @@ async def _run_task_async(
                 step_num += 1
 
                 if action.action_type == ActionType.DONE:
+                    rt_result = rt_done()
                     trace.steps.append(
-                        StepRecord(step=step_num, action={"type": "done"}, result="done")
+                        StepRecord(
+                            step=step_num,
+                            action={"type": "done"},
+                            result=rt_result.summary,
+                        )
                     )
-                    done = True
+                    adapter.notify_result(action, rt_result)
+                    loop_done = True
                     break
 
                 if action.action_type == ActionType.FAIL:
                     reason = action.params.get("reason", "Agent declared failure")
+                    rt_result = rt_fail(reason)
                     trace.steps.append(
                         StepRecord(
                             step=step_num,
                             action=_flatten_action(action),
-                            result=f"fail:{reason}",
+                            result=rt_result.summary,
                             error=reason,
                         )
                     )
+                    adapter.notify_result(action, rt_result)
                     trace.outcome = "fail"
                     trace.failure_category = FailureCategory.PLANNING
-                    done = True
+                    loop_done = True
                     break
 
                 try:
-                    result = await env.execute_action(action)
+                    rt_result = await env.execute_action(action)
                 except Exception as exc:
+                    rt_result = RuntimeResult(
+                        status=ResultStatus.ERROR,
+                        message=str(exc),
+                    )
                     trace.steps.append(
                         StepRecord(
                             step=step_num,
                             action=_flatten_action(action),
-                            result=f"error:{exc}",
+                            result=rt_result.summary,
                             error=str(exc),
                         )
                     )
+                    adapter.notify_result(action, rt_result)
                     trace.outcome = "error"
                     trace.failure_category = FailureCategory.EXECUTION
-                    done = True
+                    loop_done = True
                     break
 
                 trace.steps.append(
                     StepRecord(
                         step=step_num,
                         action=_flatten_action(action),
-                        result=result,
+                        result=rt_result.summary,
                     )
                 )
+                adapter.notify_result(action, rt_result)
 
-            if done:
+            if loop_done:
                 break
 
         trace.total_steps = step_num

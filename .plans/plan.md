@@ -152,7 +152,7 @@ These new modules are intentionally small. The goal is to isolate the two weakes
 
 ### 5. Milestone Outline
 
-#### Milestone 1: Correctness and contract cleanup
+#### ~~Milestone 1: Correctness and contract cleanup~~ ✓ COMPLETE (2026-04-05)
 
 - [x] Step 1 — Add tests for 4 verified bugs → verify: `uv run pytest tests/test_macos_env.py tests/test_task_loader.py tests/test_detailed_report.py tests/test_milestones.py -q`
 - [x] Step 2 — Fix the 4 bugs (normalize_keys, substitute_in_dict, semantic_action_ratio, milestone logging) → verify: `uv run pytest -q`
@@ -184,7 +184,14 @@ Exit criteria:
 - `python -m mypy src` passes
 - all 324+ existing tests still pass
 
-#### Milestone 2: Structured action-result contract
+#### ~~Milestone 2: Structured action-result contract~~ ✓ COMPLETE (2026-04-05)
+
+- [x] Step 1 — Add `RuntimeResult`, `ResultStatus`, `ExecutionMethod` in `src/harness/runtime_results.py` with summary/serialization → verify: `uv run pytest tests/test_runtime_results.py -q` (30 passed)
+- [x] Step 2 — Update `Environment` protocol + macOS/browser implementations to return `RuntimeResult` → verify: `uv run pytest tests/test_macos_env.py -q` (51 passed)
+- [x] Step 3 — Update runner to use `RuntimeResult.summary` for `StepRecord.result`; add `notify_result` to `Adapter` protocol; implement in structured-state adapter (real feedback), no-op in others → verify: `uv run pytest tests/test_runner_feedback.py -q` (12 passed)
+- [x] Step 4 — Fix all tests for contract change; add runner feedback + prompt verification tests → verify: `uv run pytest -q` (372 passed)
+- [x] Step 5 — Full gate: ruff + mypy + pytest → verify: 372 passed, mypy clean, ruff clean
+Commit: "structured action-result contract with adapter feedback"
 
 Scope:
 
@@ -193,26 +200,21 @@ Scope:
 - update the runner to pass actual action outcomes back to adapters
 - migrate trace persistence and reporting to the structured result while preserving a compact human-readable status in `report.md`
 
-Recommended model shape:
+Implemented model shape (in `src/harness/runtime_results.py`):
 
 - `status`: `ok | error | no_op | done | fail`
 - `message`: human-readable summary
-- `execution_method`: `coordinates | ax_press | keyboard | shell | wait | other`
+- `execution_method`: `coordinates | ax_press | keyboard | shell | wait | selector | other`
 - `target_resolved`: bool
-- `state_changed`: bool | None
-- `expected_change_observed`: bool | None
+- `state_changed`: bool | None (populated in M3)
+- `expected_change_observed`: bool | None (populated in M3)
 - `metadata`: dict for app-specific detail
 
-Why before readiness work:
-
-- the current string contract is the main reason the runner, adapter, and reports cannot share truth cleanly
-- adding more logic on top of raw strings will create more ad hoc plumbing
-
-Exit criteria:
+Exit criteria (all met):
 
 - all adapters conform to the updated protocol
-- the structured-state adapter prompt history shows real previous outcomes
-- trace and report artifacts expose structured execution results
+- the structured-state adapter prompt history shows real previous outcomes (not "pending")
+- trace and report artifacts expose structured execution results via `RuntimeResult.summary`
 
 #### Milestone 3: Post-action verification, readiness, and stagnation handling
 
