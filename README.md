@@ -43,7 +43,19 @@ uv run python -m harness compare --runs-dir runs --detailed
 
 ### Run configs
 
-Pre-built experiment configurations live in `run_configs/`. These define task × adapter × trial-count matrices for comparison runs. The CLI does not yet execute them directly — config-driven batch execution is planned for a future milestone. For now, use the individual `run` commands above.
+Pre-built experiment configurations live in `run_configs/`. Each config defines an adapter, task list, max steps, and trial count.
+
+```bash
+# Execute all tasks in a config
+uv run python -m harness run --config run_configs/structured_state_desktop.yaml
+
+# Compare structured-state vs routed
+uv run python -m harness run --config run_configs/structured_state_desktop.yaml
+uv run python -m harness run --config run_configs/structured_state_desktop_routed.yaml
+uv run python -m harness compare --runs-dir runs --detailed
+```
+
+Config-driven runs produce normal per-run artifacts in `runs/` and print a comparison summary when complete.
 
 ### Inspect results
 

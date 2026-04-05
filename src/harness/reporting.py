@@ -476,6 +476,43 @@ def generate_detailed_report(runs: list[tuple[Trace, GraderResult]]) -> str:
 
     lines.append("")
 
+    # --- Runtime verification aggregate (M3 step metrics across adapters) ---
+    has_metrics = any(s.metrics for t, _ in runs for s in t.steps)
+    if has_metrics:
+        lines.append("## Runtime Verification")
+        lines.append("")
+        lines.append(
+            "| Adapter | Steps | State Changed | No Change | Stagnation | Avg AX Elements |"
+        )
+        lines.append("|---|---|---|---|---|---|")
+
+        for adapter_name in sorted(by_adapter.keys()):
+            adapter_runs = by_adapter[adapter_name]
+            all_metrics = [
+                m for t, _ in adapter_runs for s in t.steps if (m := s.metrics) is not None
+            ]
+            if not all_metrics:
+                continue
+
+            total_m = len(all_metrics)
+            state_true = sum(1 for m in all_metrics if m.get("state_changed") is True)
+            state_false = sum(1 for m in all_metrics if m.get("state_changed") is False)
+            stagnation_count = sum(1 for m in all_metrics if m.get("stagnation_detected"))
+
+            ax_metrics = [m for m in all_metrics if "interactive_total" in m]
+            avg_ax = (
+                f"{sum(m['interactive_total'] for m in ax_metrics) / len(ax_metrics):.0f}"
+                if ax_metrics
+                else "\u2014"
+            )
+
+            lines.append(
+                f"| {adapter_name} | {total_m} | {state_true} | {state_false} "
+                f"| {stagnation_count} | {avg_ax} |"
+            )
+
+        lines.append("")
+
     # --- Legacy observation comparison (if openai_cu/hybrid runs exist) ---
     hybrid_runs = [r for r in runs if r[0].adapter in ("openai_cu", "openai_cu_hybrid")]
     if hybrid_runs:

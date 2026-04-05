@@ -298,7 +298,13 @@ Exit criteria:
 - invalid checks, unresolved compile-time issues, and schema/runtime mismatches fail during compile
 - in-tree tasks are migrated to the compiled contract in the same milestone
 
-#### Milestone 5: Experiment execution and reporting workflow
+#### ~~Milestone 5: Experiment execution and reporting workflow~~ ✓ COMPLETE (2026-04-05)
+
+- [x] Step 1 — Add `--config` to `run` CLI with tests → verify: `uv run pytest tests/test_cli_run_config.py -q` (15 passed)
+- [x] Step 2 — Add runtime verification section to detailed comparison report → verify: `uv run pytest tests/test_detailed_report.py -q` (44 passed)
+- [x] Step 3 — Update README and plan docs → verify: manual
+- [x] Step 4 — Full gate: ruff + mypy + pytest → verify: 479 passed, mypy clean, ruff clean
+Commit: "config-driven experiment execution and reporting workflow"
 
 Scope:
 

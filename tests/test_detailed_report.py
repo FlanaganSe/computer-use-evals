@@ -481,3 +481,104 @@ class TestRuntimeVerification:
         grade_result = GraderResult(passed=True, method="test", explanation="OK")
         report = generate_report(task, trace, grade_result, tmp_path)
         assert "Runtime Verification" not in report
+
+
+# ---------------------------------------------------------------------------
+# Runtime verification in detailed comparison report (M5)
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeVerificationDetailedReport:
+    def test_section_present_with_metrics(self) -> None:
+        steps = [
+            _make_step(
+                1,
+                metrics={
+                    "state_changed": True,
+                    "interactive_total": 10,
+                    "interactive_with_bounds": 8,
+                    "interactive_without_bounds": 2,
+                },
+            ),
+            _make_step(2, metrics={"state_changed": False}),
+        ]
+        runs = [
+            (
+                _make_trace(
+                    adapter="structured_state_desktop",
+                    steps=steps,
+                    total_steps=2,
+                ),
+                _make_grade(True),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        assert "## Runtime Verification" in report
+        assert "State Changed" in report
+        assert "structured_state_desktop" in report
+
+    def test_section_absent_without_metrics(self) -> None:
+        runs = [
+            (
+                _make_trace(adapter="deterministic", steps=[_make_step(1)]),
+                _make_grade(True),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        # Section should not appear if no steps have metrics
+        assert report.count("## Runtime Verification") == 0
+
+    def test_stagnation_count_shown(self) -> None:
+        steps = [
+            _make_step(1, metrics={"state_changed": False, "stagnation_detected": True}),
+        ]
+        runs = [
+            (
+                _make_trace(
+                    adapter="structured_state_desktop",
+                    steps=steps,
+                    total_steps=1,
+                ),
+                _make_grade(False),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        assert "## Runtime Verification" in report
+        # Stagnation column should show 1
+        assert "| 1 |" in report
+
+    def test_ax_elements_average(self) -> None:
+        steps = [
+            _make_step(
+                1,
+                metrics={
+                    "state_changed": True,
+                    "interactive_total": 20,
+                    "interactive_with_bounds": 15,
+                    "interactive_without_bounds": 5,
+                },
+            ),
+            _make_step(
+                2,
+                metrics={
+                    "state_changed": True,
+                    "interactive_total": 30,
+                    "interactive_with_bounds": 25,
+                    "interactive_without_bounds": 5,
+                },
+            ),
+        ]
+        runs = [
+            (
+                _make_trace(
+                    adapter="structured_state_desktop",
+                    steps=steps,
+                    total_steps=2,
+                ),
+                _make_grade(True),
+            ),
+        ]
+        report = generate_detailed_report(runs)
+        assert "## Runtime Verification" in report
+        # Average of 20 and 30 = 25
+        assert "25" in report

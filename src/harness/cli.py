@@ -6,23 +6,117 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 from harness.capture import capture_session
 from harness.compiler import CompileError, compile_draft_file
 from harness.intent_extract import author_task, group_events, load_events
 from harness.reporting import collect_runs, generate_comparison_report, generate_detailed_report
-from harness.runner import run_task
+from harness.runner import ADAPTERS, run_task
+from harness.types import GraderResult, RunConfig, Trace
+
+
+def _run_config(config_path: str, runs_dir: str) -> None:
+    """Execute all tasks defined in a run config YAML file."""
+    path = Path(config_path)
+    if not path.exists():
+        print(f"Error: config file not found: {config_path}", file=sys.stderr)
+        sys.exit(1)
+
+    from pydantic import ValidationError
+
+    raw = yaml.safe_load(path.read_text())
+    if not isinstance(raw, dict):
+        print(f"Error: config file is empty or not valid YAML: {config_path}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        config = RunConfig.model_validate(raw)
+    except ValidationError as exc:
+        print(f"Error: invalid config: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if config.adapter not in ADAPTERS:
+        print(
+            f"Error: unknown adapter '{config.adapter}'. Available: {', '.join(ADAPTERS.keys())}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not config.tasks:
+        print("Error: config defines no tasks", file=sys.stderr)
+        sys.exit(1)
+
+    if config.trial_count < 1:
+        print("Error: trial_count must be at least 1", file=sys.stderr)
+        sys.exit(1)
+
+    total_runs = len(config.tasks) * config.trial_count
+    print(f"Config: {config_path}")
+    print(f"Adapter: {config.adapter}")
+    print(f"Tasks: {len(config.tasks)} | Trials: {config.trial_count} | Total runs: {total_runs}")
+    print()
+
+    run_dirs: list[Path] = []
+    run_num = 0
+    for task_path in config.tasks:
+        for trial in range(config.trial_count):
+            run_num += 1
+            trial_label = (
+                f" (trial {trial + 1}/{config.trial_count})" if config.trial_count > 1 else ""
+            )
+            print(
+                f"[{run_num}/{total_runs}] {task_path}{trial_label} ... ",
+                end="",
+                flush=True,
+            )
+            try:
+                run_dir = run_task(
+                    task_path=task_path,
+                    adapter_name=config.adapter,
+                    max_steps=config.max_steps,
+                    runs_dir=runs_dir,
+                )
+                run_dirs.append(run_dir)
+                trace_path = run_dir / "trace.json"
+                if trace_path.exists():
+                    trace = Trace.model_validate_json(trace_path.read_text())
+                    print(trace.outcome)
+                else:
+                    print("done")
+            except Exception as exc:
+                print(f"error: {exc}")
+
+    # Print summary from completed runs
+    if run_dirs:
+        results: list[tuple[Trace, GraderResult]] = []
+        for rd in run_dirs:
+            trace_path = rd / "trace.json"
+            grade_path = rd / "grade.json"
+            if trace_path.exists() and grade_path.exists():
+                t = Trace.model_validate_json(trace_path.read_text())
+                g = GraderResult.model_validate_json(grade_path.read_text())
+                results.append((t, g))
+        if results:
+            print()
+            print(generate_comparison_report(results))
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="harness", description="Desktop Agent Eval Harness")
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Run a task")
-    run_parser.add_argument("task", help="Path to task YAML file")
+    run_parser = subparsers.add_parser("run", help="Run a task or execute a run config")
+    run_parser.add_argument("task", nargs="?", default=None, help="Path to task YAML file")
+    run_parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to run config YAML file (alternative to positional task)",
+    )
     run_parser.add_argument(
         "--adapter",
-        required=True,
-        help="Adapter name (primary: structured_state_desktop, "
+        default=None,
+        help="Adapter name (required with positional task; "
+        "primary: structured_state_desktop, "
         "structured_state_desktop_routed; baselines: deterministic; "
         "legacy comparison: openai_cu, openai_cu_hybrid, codex_subscription)",
     )
@@ -82,13 +176,34 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     if args.command == "run":
-        run_dir = run_task(
-            task_path=args.task,
-            adapter_name=args.adapter,
-            max_steps=args.max_steps,
-            runs_dir=args.runs_dir,
-        )
-        print(f"Run complete: {run_dir}")
+        if args.config and args.task:
+            print("Error: cannot specify both task and --config", file=sys.stderr)
+            sys.exit(1)
+        if args.config:
+            if args.adapter:
+                print(
+                    "Error: --adapter is set by the config file; do not combine with --config",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            _run_config(args.config, args.runs_dir)
+        elif args.task:
+            if not args.adapter:
+                print(
+                    "Error: --adapter is required when running a single task",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            run_dir = run_task(
+                task_path=args.task,
+                adapter_name=args.adapter,
+                max_steps=args.max_steps,
+                runs_dir=args.runs_dir,
+            )
+            print(f"Run complete: {run_dir}")
+        else:
+            print("Error: provide a task path or --config", file=sys.stderr)
+            sys.exit(1)
 
     elif args.command == "compare":
         runs = collect_runs(Path(args.runs_dir), task_filter=args.task)
