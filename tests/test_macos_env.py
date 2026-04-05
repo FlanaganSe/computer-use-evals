@@ -236,6 +236,62 @@ class TestActionExecution:
         result = self._run_action(env, action)
         assert "error" in result
 
+    def test_shell_open_app_waits_for_focus(self) -> None:
+        """open -a command should wait for frontmost app to change."""
+        env = MacOSDesktopEnvironment()
+        action = Action(
+            action_type=ActionType.SHELL,
+            params={"command": "open", "args": ["-a", "TextEdit"]},
+        )
+
+        call_count = 0
+
+        def mock_window_info() -> dict:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                # First calls: still on the old app
+                return {"focused_app": "Code", "focused_pid": 100}
+            # After a few polls: app switched
+            return {"focused_app": "TextEdit", "focused_pid": 200}
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stderr = ""
+
+        with (
+            patch("subprocess.run", return_value=mock_result),
+            patch("harness.environments.macos._get_window_info", side_effect=mock_window_info),
+        ):
+            result = self._run_action(env, action)
+
+        assert result == "ok"
+        assert call_count >= 3  # polled until focus changed
+
+    def test_shell_non_app_switch_uses_settle_delay(self) -> None:
+        """Regular osascript commands should not poll for focus change."""
+        env = MacOSDesktopEnvironment()
+        action = Action(
+            action_type=ActionType.SHELL,
+            params={"command": "osascript", "args": ["-e", 'return "ok"']},
+        )
+        result = self._run_action(env, action)
+        assert result == "ok"
+
+    def test_is_app_switch_detection(self) -> None:
+        assert MacOSDesktopEnvironment._is_app_switch_command("open", ["-a", "TextEdit"]) is True
+        assert MacOSDesktopEnvironment._is_app_switch_command("open", ["file.txt"]) is False
+        assert (
+            MacOSDesktopEnvironment._is_app_switch_command(
+                "osascript", ["-e", 'tell application "X" to activate']
+            )
+            is True
+        )
+        assert (
+            MacOSDesktopEnvironment._is_app_switch_command("osascript", ["-e", 'return "ok"'])
+            is False
+        )
+
     def test_wait_action(self) -> None:
         env = MacOSDesktopEnvironment()
         action = Action(action_type=ActionType.WAIT, params={"ms": 10})

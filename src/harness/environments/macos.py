@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 # Post-action stabilization delay (seconds)
 _ACTION_SETTLE_DELAY = 0.5
 
+# Extra settle time after app switch is detected (let UI fully render)
+_APP_SWITCH_SETTLE = 0.5
+
+# Maximum time to wait for an app switch to take effect (seconds)
+_APP_SWITCH_TIMEOUT = 5.0
+
+# Poll interval when waiting for app switch (seconds)
+_APP_SWITCH_POLL = 0.25
+
 # Commands allowed for SHELL actions (safety allowlist)
 _SHELL_ALLOWLIST = {"osascript", "open"}
 
@@ -213,6 +222,14 @@ class MacOSDesktopEnvironment:
                 if command not in _SHELL_ALLOWLIST:
                     return f"error:shell command {command!r} not in allowlist {_SHELL_ALLOWLIST}"
                 args = params.get("args", [])
+
+                # Record pre-command frontmost app for app-switch detection
+                pre_app: str | None = None
+                is_app_switch = self._is_app_switch_command(command, args)
+                if is_app_switch:
+                    pre_info = _get_window_info()
+                    pre_app = pre_info.get("focused_app")
+
                 result = subprocess.run(
                     [command, *args],
                     capture_output=True,
@@ -222,7 +239,11 @@ class MacOSDesktopEnvironment:
                 if result.returncode != 0:
                     stderr = result.stderr.strip()
                     return f"error:shell returned {result.returncode}: {stderr}"
-                await asyncio.sleep(_ACTION_SETTLE_DELAY)
+
+                if is_app_switch and pre_app is not None:
+                    await _wait_for_app_focus_change(pre_app)
+                else:
+                    await asyncio.sleep(_ACTION_SETTLE_DELAY)
                 return "ok"
 
             case ActionType.MOVE:
@@ -240,6 +261,15 @@ class MacOSDesktopEnvironment:
 
             case _:
                 return f"error:unsupported action type {action.action_type} for desktop"
+
+    @staticmethod
+    def _is_app_switch_command(command: str, args: list[str]) -> bool:
+        """Detect whether a SHELL command is expected to change the frontmost app."""
+        if command == "open" and "-a" in args:
+            return True
+        if command == "osascript" and any("activate" in a for a in args):
+            return True
+        return False
 
     async def teardown(self) -> None:
         pass  # No persistent resources to clean up
@@ -352,6 +382,34 @@ def _get_structured_ax_tree(pid: int) -> AXNode | None:
 # ---------------------------------------------------------------------------
 # Window metadata
 # ---------------------------------------------------------------------------
+
+
+async def _wait_for_app_focus_change(pre_app: str) -> None:
+    """Poll until the frontmost app differs from pre_app, then settle.
+
+    Waits up to _APP_SWITCH_TIMEOUT seconds for the focus to change.
+    If the timeout is reached, logs a warning and continues (does not fail).
+    After focus changes, waits an additional _APP_SWITCH_SETTLE for the
+    new app's UI to finish rendering.
+    """
+    import time
+
+    deadline = time.monotonic() + _APP_SWITCH_TIMEOUT
+    while time.monotonic() < deadline:
+        info = _get_window_info()
+        current_app = info.get("focused_app")
+        if current_app is not None and current_app != pre_app:
+            # App switched — give the new app time to render its UI
+            await asyncio.sleep(_APP_SWITCH_SETTLE)
+            return
+        await asyncio.sleep(_APP_SWITCH_POLL)
+
+    logger.warning(
+        "App focus did not change from %r within %.1fs timeout",
+        pre_app,
+        _APP_SWITCH_TIMEOUT,
+    )
+    # Continue anyway — the action succeeded even if focus didn't shift
 
 
 def _get_window_info() -> dict[str, Any]:
